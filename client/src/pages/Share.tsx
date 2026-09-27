@@ -1,0 +1,22 @@
+import { useState } from "react";
+import { ArrowLeft, Download, FileText, Image as ImageIcon, Link2, LockKeyhole, Play, Sparkles } from "lucide-react";
+import { trpc } from "@/lib/trpc";
+
+type SharedItem = { id: number; title: string; description?: string | null; body?: string | null; url?: string | null; fileUrl?: string | null; type: "image" | "video" | "note" | "link" | "publication"; category?: string | null };
+
+export default function Share() {
+  const [token] = useState(() => window.location.pathname.split("/").pop() || "");
+  const { data, isLoading } = trpc.share.public.useQuery({ token }, { enabled: token.length > 0, retry: false });
+
+  if (isLoading) return <div className="grid min-h-screen place-items-center bg-[#f7f7f2] text-[#71807d]"><span className="flex items-center gap-2 text-sm"><span className="h-2 w-2 animate-pulse rounded-full bg-[#ef795d]" /> Abriendo enlace privado...</span></div>;
+  if (!data) return <div className="grid min-h-screen place-items-center bg-[#f7f7f2] p-6 text-center"><div><span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#fff0eb] text-[#ef795d]"><LockKeyhole size={22} /></span><h1 className="mt-5 font-serif text-3xl text-[#29373d]">Este enlace ya no está disponible</h1><p className="mt-2 max-w-sm text-sm leading-6 text-[#84908d]">Puede haber caducado o su propietario dejó de compartirlo.</p></div></div>;
+
+  return <div className="min-h-screen bg-[#f7f7f2] text-[#29373d]"><header className="border-b border-[#e8e6de] bg-[#fbfbf7]/90 px-5 py-5 backdrop-blur sm:px-10"><div className="mx-auto flex max-w-5xl items-center justify-between"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-[14px] bg-[#ef795d] text-white"><Sparkles size={18} /></span><div><p className="font-serif text-xl">Mi biblioteca</p><p className="text-[10px] font-bold uppercase tracking-[.17em] text-[#a0a8a4]">enlace privado</p></div></div><span className="flex items-center gap-1.5 rounded-full bg-[#e8f4ed] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.12em] text-[#4a9874]"><LockKeyhole size={12} /> Solo lectura</span></div></header><main className="mx-auto max-w-5xl px-5 py-10 sm:px-10"><button onClick={() => window.history.back()} className="mb-8 flex items-center gap-2 text-xs font-semibold text-[#8b9692] hover:text-[#db674f]"><ArrowLeft size={14} /> Volver</button><div className="max-w-2xl"><p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#ef795d]">Compartido contigo</p><h1 className="mt-3 font-serif text-4xl tracking-[-.04em] sm:text-5xl">{data.title}</h1><p className="mt-3 text-sm text-[#84908d]">{data.kind === "collection" ? `${data.items.length} elementos en esta colección.` : "Un contenido guardado para que puedas consultarlo."}</p></div><div className="mt-9 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{data.items.map((item: SharedItem) => <article key={item.id} className="overflow-hidden rounded-[20px] border border-[#ebe9e0] bg-white shadow-[0_10px_24px_rgba(61,70,65,.05)]">{item.fileUrl && item.type === "image" ? <img src={item.fileUrl} alt={item.title} className="h-48 w-full object-cover" /> : item.fileUrl && item.type === "video" ? <div className="relative h-48 bg-[#29373d]"><video src={item.fileUrl} controls className="h-full w-full object-cover" /><span className="pointer-events-none absolute left-3 top-3 rounded-full bg-white/90 px-2 py-1 text-[10px] font-semibold text-[#5d696d]">Video</span></div> : <div className="grid h-36 place-items-center bg-[#f0edff] text-[#7864cd]"><span className="grid h-12 w-12 place-items-center rounded-2xl bg-white"><TypeIcon type={item.type} /></span></div>}<div className="p-4"><div className="flex items-start justify-between gap-3"><h2 className="text-sm font-semibold text-[#344149]">{item.title}</h2>{item.url && <a href={item.url} target="_blank" rel="noreferrer" className="text-[#ef795d]"><Link2 size={15} /></a>}</div><p className="mt-2 line-clamp-3 text-xs leading-5 text-[#8b9593]">{item.description || item.body || item.url || ""}</p>{item.fileUrl && <a href={item.fileUrl} download className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-bold text-[#db674f]"><Download size={13} /> Descargar archivo</a>}</div></article>)}</div></main></div>;
+}
+
+function TypeIcon({ type }: { type: SharedItem["type"] }) {
+  if (type === "image") return <ImageIcon size={21} />;
+  if (type === "video") return <Play size={21} />;
+  if (type === "link") return <Link2 size={21} />;
+  return <FileText size={21} />;
+}

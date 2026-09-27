@@ -15,6 +15,13 @@
       "when": 1790543906487,
       "tag": "0001_graceful_maverick",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1790544338313,
+      "tag": "0002_certain_payback",
+      "breakpoints": true
     }
   ]
 }

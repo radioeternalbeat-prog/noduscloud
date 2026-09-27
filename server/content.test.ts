@@ -20,4 +20,14 @@ describe("content procedures", () => {
     const caller = appRouter.createCaller(createAnonymousContext());
     await expect(caller.content.create({ type: "note", title: "Idea privada" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
+
+  it("requires authentication to upload a file", async () => {
+    const caller = appRouter.createCaller(createAnonymousContext());
+    await expect(caller.content.upload({ fileName: "foto.jpg", contentType: "image/jpeg", dataBase64: "ZmFrZQ==" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("returns no data for an invalid public share token", async () => {
+    const caller = appRouter.createCaller(createAnonymousContext());
+    await expect(caller.share.public({ token: "token-no-existe-123" })).resolves.toBeNull();
+  });
 });

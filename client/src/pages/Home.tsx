@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
@@ -57,6 +57,7 @@ type ContentItem = {
   platform?: string | null;
   isFavorite: boolean;
   createdAt?: Date | string;
+  scheduledAt?: Date | string | null;
 };
 
 const demoItems: ContentItem[] = [
@@ -177,6 +178,11 @@ export default function Home() {
   const [newBody, setNewBody] = useState("");
   const [newCategory, setNewCategory] = useState("Sin organizar");
   const [newPlatform, setNewPlatform] = useState("");
+  const [newScheduledAt, setNewScheduledAt] = useState("");
+  const [shareTarget, setShareTarget] = useState<{ kind: "content" | "collection"; title: string; contentId?: number; collectionName?: string } | null>(null);
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareId, setShareId] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const contentQuery = trpc.content.list.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -184,6 +190,9 @@ export default function Home() {
   });
   const createContent = trpc.content.create.useMutation();
   const updateContent = trpc.content.update.useMutation();
+  const uploadFile = trpc.content.upload.useMutation();
+  const createShare = trpc.share.create.useMutation();
+  const deactivateShare = trpc.share.deactivate.useMutation();
 
   useEffect(() => {
     if (isAuthenticated && contentQuery.data) {
@@ -229,6 +238,42 @@ export default function Home() {
     setNewBody("");
     setNewCategory("Sin organizar");
     setNewPlatform("");
+    setNewScheduledAt("");
+  };
+
+  const handleFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
+    if (!isAuthenticated) {
+      toast.info("Inicia sesión para guardar archivos reales en tu biblioteca.");
+      startLogin();
+      return;
+    }
+    for (const file of files) {
+      if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+        toast.error(`${file.name} no es una foto o video compatible.`);
+        continue;
+      }
+      if (file.size > 45 * 1024 * 1024) {
+        toast.error(`${file.name} supera el límite de 45 MB.`);
+        continue;
+      }
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const base64 = dataUrl.split(",")[1] || "";
+      try {
+        const uploaded = await uploadFile.mutateAsync({ fileName: file.name, contentType: file.type, dataBase64: base64 });
+        setItems(current => [{ ...uploaded, tags: uploaded.tags ?? "", image: uploaded.type === "image" ? uploaded.fileUrl ?? undefined : undefined }, ...current]);
+        toast.success(`${file.name} ya está en tu biblioteca.`);
+      } catch {
+        toast.error(`No se pudo cargar ${file.name}.`);
+      }
+    }
   };
 
   const addItem = () => {
@@ -245,7 +290,8 @@ export default function Home() {
       category: newCategory,
       tags: newPlatform ? newPlatform.toLowerCase() : "",
       platform: newPlatform,
-      status: "idea",
+      status: newScheduledAt ? "ready" : "idea",
+      scheduledAt: newScheduledAt || null,
       isFavorite: false,
     };
 
@@ -258,7 +304,8 @@ export default function Home() {
         category: localItem.category ?? undefined,
         platform: localItem.platform ?? undefined,
         tags: localItem.tags ?? undefined,
-        status: "idea",
+        status: newScheduledAt ? "ready" : "idea",
+        scheduledAt: newScheduledAt || undefined,
       }, {
         onSuccess: created => {
           setItems(current => [{ ...created, tags: created.tags ?? "" }, ...current]);
@@ -282,6 +329,20 @@ export default function Home() {
     }
   };
 
+  const changeStatus = (item: ContentItem, status: Status) => {
+    setItems(current => current.map(entry => entry.id === item.id ? { ...entry, status } : entry));
+    if (isAuthenticated && typeof item.id === "number") updateContent.mutate({ id: item.id, values: { status } });
+    toast.success(`Estado cambiado a ${statusCopy[status].label.toLowerCase()}.`);
+  };
+
+  const scheduleItem = (item: ContentItem, date: Date) => {
+    const scheduledAt = new Date(date);
+    scheduledAt.setHours(10, 0, 0, 0);
+    setItems(current => current.map(entry => entry.id === item.id ? { ...entry, scheduledAt, status: entry.status === "published" ? entry.status : "ready" } : entry));
+    if (isAuthenticated && typeof item.id === "number") updateContent.mutate({ id: item.id, values: { scheduledAt: scheduledAt.toISOString(), status: item.status === "published" ? "published" : "ready" } });
+    toast.success(`“${item.title}” programado para el ${scheduledAt.toLocaleDateString("es-ES", { day: "numeric", month: "long" })}.`);
+  };
+
   const copyItem = async (item: ContentItem) => {
     const text = item.body || item.description || item.url || item.title;
     try {
@@ -292,16 +353,29 @@ export default function Home() {
     }
   };
 
-  const shareItem = async (item: ContentItem) => {
-    const shareData = { title: item.title, text: item.description || item.body || item.title, url: item.url || window.location.href };
-    const canShare = typeof navigator.share === "function";
-    try {
-      if (canShare) await navigator.share(shareData);
-      else await navigator.clipboard.writeText(shareData.url);
-      toast.success(canShare ? "Contenido compartido." : "Enlace copiado.");
-    } catch {
-      toast.info("Puedes compartirlo cuando quieras.");
+  const openShare = (item?: ContentItem, collectionName?: string) => {
+    if (!isAuthenticated) {
+      toast.info("Inicia sesión para crear enlaces privados.");
+      startLogin();
+      return;
     }
+    setShareUrl("");
+    setShareId(null);
+    setShareTarget(item ? { kind: "content", title: item.title, contentId: typeof item.id === "number" ? item.id : undefined } : { kind: "collection", title: collectionName || "Colección", collectionName });
+  };
+
+  const createPrivateShare = () => {
+    if (!shareTarget) return;
+    createShare.mutate({ ...shareTarget, expiresAt: undefined }, {
+      onSuccess: result => {
+        const url = `${window.location.origin}${result.url}`;
+        setShareUrl(url);
+        setShareId(result.id);
+        navigator.clipboard?.writeText(url);
+        toast.success("Enlace privado creado y copiado.");
+      },
+      onError: error => toast.error(error.message || "No se pudo crear el enlace."),
+    });
   };
 
   const displayName = user?.name?.split(" ")[0] || "tu biblioteca";
@@ -314,6 +388,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#f7f7f2] text-[#253039] selection:bg-[#f2b4a4]/40">
+      <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple className="hidden" onChange={handleFiles} />
       {mobileMenu && <button aria-label="Cerrar menú" className="fixed inset-0 z-30 bg-[#24313a]/30 lg:hidden" onClick={() => setMobileMenu(false)} />}
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-[258px] flex-col border-r border-[#e7e5dd] bg-[#fbfbf7] px-5 py-6 transition-transform duration-200 lg:translate-x-0 ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex items-center justify-between px-2">
@@ -355,7 +430,7 @@ export default function Home() {
         </header>
 
         <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 lg:px-11 lg:py-10">
-          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.2em] text-[#ef795d]">{activeSection === "Inicio" ? "Tu espacio creativo" : "Biblioteca de contenido"}</p><h1 className="font-serif text-[35px] leading-none tracking-[-.04em] text-[#28363d] sm:text-[43px]">{title}</h1><p className="mt-3 text-[13px] text-[#7a8587]">{subtitle}</p></div><div className="flex items-center gap-2"><button onClick={() => openComposer("image")} className="flex items-center gap-2 rounded-xl border border-[#e1dfd6] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#56636a] shadow-sm transition hover:-translate-y-0.5 hover:border-[#efb0a0]"><ImageIcon size={15} /> <span className="hidden sm:inline">Subir archivo</span><span className="sm:hidden">Subir</span></button><button onClick={() => openComposer("note")} className="flex items-center gap-2 rounded-xl bg-[#ef795d] px-3.5 py-2.5 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(239,121,93,.2)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Nuevo</button></div></div>
+          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.2em] text-[#ef795d]">{activeSection === "Inicio" ? "Tu espacio creativo" : "Biblioteca de contenido"}</p><h1 className="font-serif text-[35px] leading-none tracking-[-.04em] text-[#28363d] sm:text-[43px]">{title}</h1><p className="mt-3 text-[13px] text-[#7a8587]">{subtitle}</p></div><div className="flex items-center gap-2"><button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 rounded-xl border border-[#e1dfd6] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#56636a] shadow-sm transition hover:-translate-y-0.5 hover:border-[#efb0a0]"><ImageIcon size={15} /> <span className="hidden sm:inline">Subir archivo</span><span className="sm:hidden">Subir</span></button><button onClick={() => openComposer("note")} className="flex items-center gap-2 rounded-xl bg-[#ef795d] px-3.5 py-2.5 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(239,121,93,.2)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Nuevo</button></div></div>
 
           {activeSection === "Inicio" && <>
             <section className="mt-9 grid gap-4 md:grid-cols-[1.55fr_1fr_1fr]">
@@ -366,14 +441,16 @@ export default function Home() {
             <div className="mb-8 mt-11 flex items-center justify-between"><div><h2 className="font-serif text-[25px] tracking-[-.03em] text-[#29373d]">Añadido recientemente</h2><p className="mt-1 text-[12px] text-[#8a9491]">Lo último que vive en tu biblioteca.</p></div><button onClick={() => selectSection("Biblioteca")} className="flex items-center gap-1.5 text-[12px] font-semibold text-[#db674f] transition hover:gap-2.5">Ver todo <ArrowUpRight size={14} /></button></div>
           </>}
 
-          <section className={activeSection === "Inicio" ? "" : "mt-9"}>
+          {activeSection === "Calendario" && <CalendarPanel items={items} onSchedule={scheduleItem} onStatus={changeStatus} />}
+
+          <section className={activeSection === "Inicio" || activeSection === "Calendario" ? "mt-8" : "mt-9"}>
             <div className="mb-5 flex flex-col gap-3 rounded-[18px] border border-[#ebe9e0] bg-white/60 p-2.5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-1 overflow-x-auto"><button onClick={() => setActiveFilter("all")} className={`shrink-0 rounded-xl px-3 py-2 text-[11px] font-semibold transition ${activeFilter === "all" ? "bg-[#29373d] text-white" : "text-[#7c8786] hover:bg-[#f1f1eb]"}`}>Todo</button>{(["image", "note", "link", "publication"] as ContentType[]).map(type => <button key={type} onClick={() => setActiveFilter(type)} className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-[11px] font-semibold capitalize transition ${activeFilter === type ? "bg-[#fff0eb] text-[#db674f]" : "text-[#7c8786] hover:bg-[#f1f1eb]"}`}><TypeIcon type={type} size={13} />{type === "image" ? "Fotos" : type === "note" ? "Notas" : type === "link" ? "Enlaces" : "Publicaciones"}</button>)}</div><div className="flex items-center justify-between gap-2 px-1 sm:justify-end"><button onClick={() => setQuery("")} className="flex items-center gap-1.5 text-[11px] text-[#9aa19d] hover:text-[#db674f]"><Filter size={13} /> {query ? `Filtrado por “${query}”` : "Filtros"}</button><span className="h-4 w-px bg-[#e8e7df]" /><button onClick={() => setView("grid")} className={`rounded-lg p-1.5 ${view === "grid" ? "bg-[#f0efea] text-[#3b4a4f]" : "text-[#a0a8a5]"}`}><Grid2X2 size={15} /></button><button onClick={() => setView("list")} className={`rounded-lg p-1.5 ${view === "list" ? "bg-[#f0efea] text-[#3b4a4f]" : "text-[#a0a8a5]"}`}><List size={15} /></button></div></div>
 
-            {visibleItems.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#dddcd2] bg-white/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#fff0eb] text-[#ef795d]"><Search size={20} /></span><h3 className="mt-4 font-serif text-[21px] text-[#29373d]">No encontramos nada</h3><p className="mt-2 text-[12px] text-[#8b9492]">Prueba con otra palabra o crea un contenido nuevo.</p><button onClick={() => { setQuery(""); setActiveFilter("all"); }} className="mt-5 rounded-xl bg-[#29373d] px-4 py-2.5 text-[12px] font-semibold text-white">Limpiar filtros</button></div> : <div className={view === "grid" ? "grid gap-4 sm:grid-cols-2 xl:grid-cols-3" : "space-y-3"}>{visibleItems.map((item, index) => <ContentCard key={item.id} item={item} index={index} view={view} onFavorite={() => toggleFavorite(item)} onCopy={() => copyItem(item)} onShare={() => shareItem(item)} />)}</div>}
+            {visibleItems.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#dddcd2] bg-white/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#fff0eb] text-[#ef795d]"><Search size={20} /></span><h3 className="mt-4 font-serif text-[21px] text-[#29373d]">No encontramos nada</h3><p className="mt-2 text-[12px] text-[#8b9492]">Prueba con otra palabra o crea un contenido nuevo.</p><button onClick={() => { setQuery(""); setActiveFilter("all"); }} className="mt-5 rounded-xl bg-[#29373d] px-4 py-2.5 text-[12px] font-semibold text-white">Limpiar filtros</button></div> : <div className={view === "grid" ? "grid gap-4 sm:grid-cols-2 xl:grid-cols-3" : "space-y-3"}>{visibleItems.map((item, index) => <ContentCard key={item.id} item={item} index={index} view={view} onFavorite={() => toggleFavorite(item)} onCopy={() => copyItem(item)} onShare={() => openShare(item)} />)}</div>}
           </section>
 
           <div className="mt-12 grid gap-4 lg:grid-cols-[1.35fr_1fr]">
-            <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-6 sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#a4aaa5]">Acceso rápido</p><h2 className="mt-2 font-serif text-[23px] tracking-[-.03em]">Guardar sin pensarlo mucho</h2></div><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f2f0ff] text-[#7967cf]"><Sparkles size={17} /></span></div><div className="mt-6 grid gap-2 sm:grid-cols-3"><QuickAction icon={<NotebookPen size={17} />} label="Nueva nota" tone="purple" onClick={() => openComposer("note")} /><QuickAction icon={<Link2 size={17} />} label="Guardar enlace" tone="green" onClick={() => openComposer("link")} /><QuickAction icon={<ImageIcon size={17} />} label="Subir foto" tone="orange" onClick={() => openComposer("image")} /></div></div>
+            <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-6 sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#a4aaa5]">Acceso rápido</p><h2 className="mt-2 font-serif text-[23px] tracking-[-.03em]">Guardar sin pensarlo mucho</h2></div><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f2f0ff] text-[#7967cf]"><Sparkles size={17} /></span></div><div className="mt-6 grid gap-2 sm:grid-cols-2 lg:grid-cols-4"><QuickAction icon={<NotebookPen size={17} />} label="Nueva nota" tone="purple" onClick={() => openComposer("note")} /><QuickAction icon={<Link2 size={17} />} label="Guardar enlace" tone="green" onClick={() => openComposer("link")} /><QuickAction icon={<ImageIcon size={17} />} label="Subir foto o video" tone="orange" onClick={() => fileInputRef.current?.click()} /><QuickAction icon={<Send size={17} />} label="Compartir colección" tone="green" onClick={() => openShare(undefined, "Promociones")} /></div></div>
             <div className="rounded-[22px] bg-[#fff1ec] p-6 sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#c67564]">Próximo paso</p><h2 className="mt-2 font-serif text-[23px] leading-tight tracking-[-.03em] text-[#533b37]">Tienes {stats.ideas} ideas esperando convertirse en algo.</h2></div><span className="text-[28px]">✦</span></div><button onClick={() => { setActiveSection("Biblioteca"); setActiveFilter("note"); }} className="mt-6 inline-flex items-center gap-1.5 text-[12px] font-bold text-[#c55f4c]">Ver mis ideas <ArrowUpRight size={14} /></button></div>
           </div>
 
@@ -381,7 +458,8 @@ export default function Home() {
         </div>
       </main>
 
-      {showComposer && <Composer type={composerType} setType={setComposerType} title={newTitle} body={newBody} category={newCategory} platform={newPlatform} setTitle={setNewTitle} setBody={setNewBody} setCategory={setNewCategory} setPlatform={setNewPlatform} onClose={resetComposer} onSave={addItem} saving={createContent.isPending} />}
+      {showComposer && <Composer type={composerType} setType={setComposerType} title={newTitle} body={newBody} category={newCategory} platform={newPlatform} scheduledAt={newScheduledAt} setTitle={setNewTitle} setBody={setNewBody} setCategory={setNewCategory} setPlatform={setNewPlatform} setScheduledAt={setNewScheduledAt} onClose={resetComposer} onSave={addItem} saving={createContent.isPending} />}
+      {shareTarget && <ShareDialog target={shareTarget} shareUrl={shareUrl} shareId={shareId} onClose={() => { setShareTarget(null); setShareUrl(""); setShareId(null); }} onCreate={createPrivateShare} onDeactivate={() => { if (shareId) { deactivateShare.mutate({ id: shareId }, { onSuccess: () => toast.success("Enlace desactivado.") }); } setShareTarget(null); setShareUrl(""); setShareId(null); }} creating={createShare.isPending} />}
     </div>
   );
 }
@@ -398,6 +476,44 @@ function QuickAction({ icon, label, tone, onClick }: { icon: React.ReactNode; la
   return <button onClick={onClick} className="flex items-center gap-2.5 rounded-xl border border-[#efeee8] bg-[#fcfcf9] px-3 py-3 text-left text-[11px] font-semibold text-[#627075] transition hover:-translate-y-0.5 hover:border-[#dddcd2] hover:bg-white"><span className={`grid h-8 w-8 place-items-center rounded-lg ${tones[tone]}`}>{icon}</span><span>{label}</span></button>;
 }
 
-function Composer({ type, setType, title, body, category, platform, setTitle, setBody, setCategory, setPlatform, onClose, onSave, saving }: { type: ContentType; setType: (value: ContentType) => void; title: string; body: string; category: string; platform: string; setTitle: (value: string) => void; setBody: (value: string) => void; setCategory: (value: string) => void; setPlatform: (value: string) => void; onClose: () => void; onSave: () => void; saving: boolean }) {
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[540px] rounded-t-[26px] border border-white/80 bg-[#fbfbf7] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Nuevo contenido</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#29373d]">Añade algo a tu espacio</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#f0f0ea] hover:text-[#3e4b50]"><X size={18} /></button></div><div className="mt-6 grid grid-cols-4 gap-2">{(["note", "link", "image", "publication"] as ContentType[]).map(option => <button key={option} onClick={() => setType(option)} className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-[10px] font-semibold transition ${type === option ? "border-[#f2b2a1] bg-[#fff0eb] text-[#d9674e]" : "border-[#e8e7df] text-[#8d9692] hover:bg-white"}`}><TypeIcon type={option} size={16} />{option === "note" ? "Nota" : option === "link" ? "Enlace" : option === "image" ? "Foto" : "Publicación"}</button>)}</div><div className="mt-5 space-y-3"><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="Título del contenido" className="h-12 w-full rounded-xl border border-[#e4e3da] bg-white px-4 text-[13px] font-medium text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><textarea value={body} onChange={event => setBody(event.target.value)} placeholder={type === "link" ? "Pega aquí el enlace o escribe una nota sobre él..." : "Escribe una idea, texto o contexto para volver a encontrarlo..."} className="min-h-[112px] w-full resize-none rounded-xl border border-[#e4e3da] bg-white px-4 py-3 text-[13px] leading-5 text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><div className="grid gap-3 sm:grid-cols-2"><div className="relative"><Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={category} onChange={event => setCategory(event.target.value)} placeholder="Categoría" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div><div className="relative"><Send className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={platform} onChange={event => setPlatform(event.target.value)} placeholder="Plataforma (opcional)" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div></div></div><div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#7c8785] hover:bg-[#f0f0ea]">Cancelar</button><button onClick={onSave} disabled={saving} className="flex items-center gap-2 rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#3e4e55] disabled:cursor-wait disabled:opacity-70">{saving ? "Guardando..." : "Guardar en biblioteca"}<ArrowUpRight size={14} /></button></div></div></div>;
+function Composer({ type, setType, title, body, category, platform, scheduledAt, setTitle, setBody, setCategory, setPlatform, setScheduledAt, onClose, onSave, saving }: { type: ContentType; setType: (value: ContentType) => void; title: string; body: string; category: string; platform: string; scheduledAt: string; setTitle: (value: string) => void; setBody: (value: string) => void; setCategory: (value: string) => void; setPlatform: (value: string) => void; setScheduledAt: (value: string) => void; onClose: () => void; onSave: () => void; saving: boolean }) {
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[540px] rounded-t-[26px] border border-white/80 bg-[#fbfbf7] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Nuevo contenido</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#29373d]">Añade algo a tu espacio</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#f0f0ea] hover:text-[#3e4b50]"><X size={18} /></button></div><div className="mt-6 grid grid-cols-4 gap-2">{(["note", "link", "image", "publication"] as ContentType[]).map(option => <button key={option} onClick={() => setType(option)} className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-[10px] font-semibold transition ${type === option ? "border-[#f2b2a1] bg-[#fff0eb] text-[#d9674e]" : "border-[#e8e7df] text-[#8d9692] hover:bg-white"}`}><TypeIcon type={option} size={16} />{option === "note" ? "Nota" : option === "link" ? "Enlace" : option === "image" ? "Foto" : "Publicación"}</button>)}</div><div className="mt-5 space-y-3"><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="Título del contenido" className="h-12 w-full rounded-xl border border-[#e4e3da] bg-white px-4 text-[13px] font-medium text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><textarea value={body} onChange={event => setBody(event.target.value)} placeholder={type === "link" ? "Pega aquí el enlace o escribe una nota sobre él..." : "Escribe una idea, texto o contexto para volver a encontrarlo..."} className="min-h-[112px] w-full resize-none rounded-xl border border-[#e4e3da] bg-white px-4 py-3 text-[13px] leading-5 text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><div className="grid gap-3 sm:grid-cols-2"><div className="relative"><Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={category} onChange={event => setCategory(event.target.value)} placeholder="Categoría" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div><div className="relative"><Send className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={platform} onChange={event => setPlatform(event.target.value)} placeholder="Plataforma (opcional)" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div></div></div><div className="mt-4 flex items-center gap-3 rounded-xl border border-[#e4e3da] bg-white px-3 py-2.5"><CalendarDays size={15} className="text-[#ef795d]" /><div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Programar publicación</p><input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} className="mt-1 w-full bg-transparent text-[12px] text-[#344149] outline-none" /></div><button type="button" onClick={() => setScheduledAt("")} className="text-[11px] text-[#9aa29e] hover:text-[#ef795d]">Quitar</button></div><div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#7c8785] hover:bg-[#f0f0ea]">Cancelar</button><button onClick={onSave} disabled={saving} className="flex items-center gap-2 rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#3e4e55] disabled:cursor-wait disabled:opacity-70">{saving ? "Guardando..." : "Guardar en biblioteca"}<ArrowUpRight size={14} /></button></div></div></div>;
+}
+
+
+function CalendarPanel({ items, onSchedule, onStatus }: { items: ContentItem[]; onSchedule: (item: ContentItem, date: Date) => void; onStatus: (item: ContentItem, status: Status) => void }) {
+  const [cursor, setCursor] = useState(() => new Date());
+  const [selected, setSelected] = useState(() => new Date());
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = Array.from({ length: Math.ceil((firstWeekday + daysInMonth) / 7) * 7 }, (_, index) => {
+    const day = index - firstWeekday + 1;
+    return day > 0 && day <= daysInMonth ? new Date(year, month, day) : null;
+  });
+  const scheduledItems = items.filter(item => item.scheduledAt);
+  const selectedItems = scheduledItems.filter(item => sameDay(new Date(item.scheduledAt as string | Date), selected));
+  const unscheduledItems = items.filter(item => !item.scheduledAt && item.status !== "published").slice(0, 5);
+  const monthLabel = cursor.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+
+  return <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-4 sm:p-6">
+    <div className="grid gap-6 lg:grid-cols-[1.35fr_1fr]">
+      <div>
+        <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Planificación</p><h2 className="mt-2 font-serif text-[25px] capitalize tracking-[-.03em]">{monthLabel}</h2></div><div className="flex gap-1"><button onClick={() => setCursor(new Date(year, month - 1, 1))} className="grid h-9 w-9 place-items-center rounded-xl border border-[#e8e7df] text-[#7e8987] hover:bg-[#f6f5ef]">‹</button><button onClick={() => { const today = new Date(); setCursor(today); setSelected(today); }} className="rounded-xl border border-[#e8e7df] px-3 text-[11px] font-semibold text-[#7e8987] hover:bg-[#f6f5ef]">Hoy</button><button onClick={() => setCursor(new Date(year, month + 1, 1))} className="grid h-9 w-9 place-items-center rounded-xl border border-[#e8e7df] text-[#7e8987] hover:bg-[#f6f5ef]">›</button></div></div>
+        <div className="mt-6 grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase tracking-[.08em] text-[#a6ada8]">{["L", "M", "X", "J", "V", "S", "D"].map(day => <span key={day} className="py-2">{day}</span>)}{cells.map((date, index) => date ? <button key={index} onClick={() => setSelected(date)} className={`relative flex min-h-[52px] flex-col items-center justify-start rounded-xl py-2 text-[12px] transition ${sameDay(date, selected) ? "bg-[#29373d] font-bold text-white" : sameDay(date, new Date()) ? "bg-[#fff0eb] font-bold text-[#db674f]" : "text-[#667276] hover:bg-[#f5f4ee]"}`}><span>{date.getDate()}</span>{scheduledItems.some(item => sameDay(new Date(item.scheduledAt as string | Date), date)) && <span className={`mt-1 h-1.5 w-1.5 rounded-full ${sameDay(date, selected) ? "bg-[#efb29f]" : "bg-[#ef795d]"}`} />}</button> : <span key={index} />)}</div>
+      </div>
+      <div className="rounded-[18px] bg-[#f8f7f2] p-4 sm:p-5"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9aa29e]">Agenda del día</p><h3 className="mt-2 font-serif text-[21px] capitalize text-[#344149]">{selected.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</h3>{selectedItems.length ? <div className="mt-4 space-y-2">{selectedItems.map(item => <div key={item.id} className="rounded-xl border border-[#eceae1] bg-white p-3"><div className="flex items-start justify-between gap-2"><p className="text-[12px] font-semibold text-[#344149]">{item.title}</p><span className={`rounded-full px-2 py-1 text-[9px] font-semibold ${statusCopy[item.status].className}`}>{statusCopy[item.status].label}</span></div><div className="mt-3 flex gap-1.5"><button onClick={() => onStatus(item, item.status === "published" ? "ready" : "published")} className="rounded-lg bg-[#29373d] px-2.5 py-1.5 text-[10px] font-semibold text-white">{item.status === "published" ? "Volver a listo" : "Marcar publicado"}</button><button onClick={() => onSchedule(item, new Date())} className="rounded-lg border border-[#e4e3da] px-2.5 py-1.5 text-[10px] font-semibold text-[#7c8785]">Hoy</button></div></div>)}</div> : <div className="mt-5 rounded-xl border border-dashed border-[#deddd3] px-4 py-5 text-center"><p className="text-[11px] leading-5 text-[#929b97]">No hay publicaciones para este día.</p>{unscheduledItems.length > 0 && <p className="mt-2 text-[10px] font-semibold text-[#db674f]">Programa una idea desde la lista.</p>}</div>}</div>
+    </div>
+    {unscheduledItems.length > 0 && <div className="mt-6 border-t border-[#eceae3] pt-5"><div className="flex items-center justify-between"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9aa29e]">Sin fecha</p><span className="text-[10px] text-[#a7ada9]">Selecciona un día arriba</span></div><div className="mt-3 flex gap-2 overflow-x-auto pb-1">{unscheduledItems.map(item => <button key={item.id} onClick={() => onSchedule(item, selected)} className="flex min-w-[170px] items-center gap-2 rounded-xl border border-[#e8e7df] bg-white px-3 py-2 text-left transition hover:-translate-y-0.5 hover:border-[#efb0a0]"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#f0edff] text-[#7864cd]"><TypeIcon type={item.type} size={13} /></span><span className="min-w-0"><span className="block truncate text-[11px] font-semibold text-[#546269]">{item.title}</span><span className="block text-[10px] text-[#a1aaa5]">Programar aquí</span></span></button>)}</div></div>}
+  </div>;
+}
+
+function sameDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function ShareDialog({ target, shareUrl, shareId, onClose, onCreate, onDeactivate, creating }: { target: { kind: "content" | "collection"; title: string; contentId?: number; collectionName?: string }; shareUrl: string; shareId: number | null; onClose: () => void; onCreate: () => void; onDeactivate: () => void; creating: boolean }) {
+  const cannotCreate = target.kind === "content" && !target.contentId;
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[500px] rounded-t-[26px] border border-white/80 bg-[#fbfbf7] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Compartir de forma privada</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#29373d]">{target.title}</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#f0f0ea]"><X size={18} /></button></div><p className="mt-4 text-[12px] leading-5 text-[#7e8987]">Crea un enlace secreto de solo lectura para enviarlo a tus contactos. Puedes dejar de compartirlo cuando quieras.</p>{shareUrl ? <div className="mt-5 rounded-2xl bg-[#e8f4ed] p-4"><p className="text-[11px] font-semibold text-[#377557]">Enlace activo y copiado</p><div className="mt-2 flex items-center gap-2"><input readOnly value={shareUrl} className="min-w-0 flex-1 rounded-lg border border-[#cbe4d5] bg-white px-3 py-2 text-[11px] text-[#4a6e5b] outline-none" /><button onClick={() => { navigator.clipboard?.writeText(shareUrl); toast.success("Enlace copiado."); }} className="rounded-lg bg-[#4d9975] px-3 py-2 text-[11px] font-semibold text-white">Copiar</button></div></div> : <div className="mt-5 rounded-2xl border border-[#eceae1] bg-white p-4"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#fff0eb] text-[#ef795d]"><Link2 size={18} /></span><div><p className="text-[12px] font-semibold text-[#344149]">Enlace privado</p><p className="mt-1 text-[11px] text-[#929b97]">Solo quien tenga este enlace podrá verlo.</p></div></div></div>}{cannotCreate && <p className="mt-3 text-[11px] text-[#b26a58]">Este contenido de demostración debe guardarse primero como contenido real para poder compartirlo.</p>}<div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#7c8785] hover:bg-[#f0f0ea]">Cerrar</button>{shareUrl && shareId && <button onClick={onDeactivate} className="rounded-xl border border-[#f0c5ba] px-4 py-2.5 text-[12px] font-semibold text-[#c55f4c] hover:bg-[#fff0eb]">Desactivar enlace</button>}{!shareUrl && <button disabled={creating || cannotCreate} onClick={onCreate} className="rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{creating ? "Creando..." : "Crear enlace privado"}</button>}</div></div></div>;
 }
