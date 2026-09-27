@@ -1,33 +1,403 @@
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import { Streamdown } from 'streamdown';
+import { startLogin } from "@/const";
+import { trpc } from "@/lib/trpc";
+import {
+  Archive,
+  ArrowUpRight,
+  Bell,
+  BookOpen,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  Clipboard,
+  Copy,
+  FileText,
+  Filter,
+  FolderHeart,
+  Grid2X2,
+  Heart,
+  Image as ImageIcon,
+  Inbox,
+  LayoutGrid,
+  Link2,
+  List,
+  Menu,
+  MoreHorizontal,
+  NotebookPen,
+  Plus,
+  Search,
+  Send,
+  Settings2,
+  Sparkles,
+  Tag,
+  Trash2,
+  Video,
+  X,
+  Zap,
+} from "lucide-react";
+import { toast } from "sonner";
 
-/**
- * All content in this page are only for example, replace with your own feature implementation
- * When building pages, remember your instructions in Frontend Workflow, Frontend Best Practices, Design Guide and Common Pitfalls
- */
+type ContentType = "image" | "video" | "note" | "link" | "publication";
+type Status = "idea" | "draft" | "ready" | "published";
+type Section = "Inicio" | "Biblioteca" | "Publicaciones" | "Calendario" | "Colecciones" | "Favoritos" | "Papelera";
+
+type ContentItem = {
+  id: number | string;
+  type: ContentType;
+  title: string;
+  description?: string | null;
+  body?: string | null;
+  url?: string | null;
+  fileUrl?: string | null;
+  image?: string;
+  category?: string | null;
+  tags?: string | null;
+  status: Status;
+  platform?: string | null;
+  isFavorite: boolean;
+  createdAt?: Date | string;
+};
+
+const demoItems: ContentItem[] = [
+  {
+    id: "demo-1",
+    type: "image",
+    title: "Lanzamiento de temporada",
+    description: "Foto principal para la campaña de septiembre.",
+    image: "/manus-storage/producto_12eb2355.jpg",
+    category: "Promociones",
+    tags: "instagram, producto, campaña",
+    status: "ready",
+    platform: "Instagram",
+    isFavorite: true,
+  },
+  {
+    id: "demo-2",
+    type: "note",
+    title: "Ideas para historias",
+    description: "Tres ángulos para mostrar el detrás de escena.",
+    body: "Mostrar el proceso, contar el beneficio y cerrar con una pregunta.",
+    category: "Ideas",
+    tags: "historias, ideas",
+    status: "idea",
+    platform: "Instagram",
+    isFavorite: false,
+  },
+  {
+    id: "demo-3",
+    type: "image",
+    title: "Moodboard de marca",
+    description: "Referencias de color y composición.",
+    image: "/manus-storage/escritorio_060ef1fc.jpg",
+    category: "Recursos de marca",
+    tags: "referencia, visual",
+    status: "draft",
+    platform: "",
+    isFavorite: true,
+  },
+  {
+    id: "demo-4",
+    type: "link",
+    title: "Guía de contenidos que convierten",
+    description: "Artículo guardado para revisar y resumir.",
+    url: "https://example.com/guia-contenidos",
+    category: "Inspiración",
+    tags: "lectura, estrategia",
+    status: "idea",
+    platform: "",
+    isFavorite: false,
+  },
+  {
+    id: "demo-5",
+    type: "image",
+    title: "Mesa de trabajo",
+    description: "Textura cálida para una publicación educativa.",
+    image: "/manus-storage/ideas_d097ea82.jpg",
+    category: "Contenido educativo",
+    tags: "texturas, contenido",
+    status: "published",
+    platform: "Facebook",
+    isFavorite: false,
+  },
+  {
+    id: "demo-6",
+    type: "publication",
+    title: "Mensaje para clientes frecuentes",
+    description: "Texto listo para enviar por WhatsApp.",
+    body: "Gracias por acompañarnos. Tenemos una novedad pensada especialmente para ti.",
+    category: "Clientes",
+    tags: "whatsapp, clientes",
+    status: "ready",
+    platform: "WhatsApp",
+    isFavorite: false,
+  },
+];
+
+const sections: { label: Section; icon: typeof Inbox }[] = [
+  { label: "Inicio", icon: Inbox },
+  { label: "Biblioteca", icon: BookOpen },
+  { label: "Publicaciones", icon: Send },
+  { label: "Calendario", icon: CalendarDays },
+  { label: "Colecciones", icon: FolderHeart },
+  { label: "Favoritos", icon: Heart },
+];
+
+const statusCopy: Record<Status, { label: string; className: string }> = {
+  idea: { label: "Idea", className: "bg-[#f0ecff] text-[#6e56cf]" },
+  draft: { label: "Borrador", className: "bg-[#fff4dd] text-[#9b6a17]" },
+  ready: { label: "Listo", className: "bg-[#e6f5ed] text-[#2b7a59]" },
+  published: { label: "Publicado", className: "bg-[#edf0f2] text-[#627079]" },
+};
+
+function TypeIcon({ type, size = 15 }: { type: ContentType; size?: number }) {
+  if (type === "image") return <ImageIcon size={size} />;
+  if (type === "video") return <Video size={size} />;
+  if (type === "link") return <Link2 size={size} />;
+  if (type === "publication") return <Send size={size} />;
+  return <FileText size={size} />;
+}
+
+function formatDate(date?: Date | string) {
+  if (!date) return "Hace un momento";
+  return new Date(date).toLocaleDateString("es-ES", { day: "numeric", month: "short" });
+}
+
 export default function Home() {
-  // The useAuth hook provides authentication state.
-  // To implement login/logout, call logout(), or start login from an event
-  // handler: onClick={() => startLogin()} (imported from "@/const"). Never call
-  // startLogin() during render (no href={startLogin()}) — it mints a one-time
-  // nonce cookie and must run only at the moment of navigation.
-  let { user, loading, error, isAuthenticated, logout } = useAuth();
+  const { user, loading, isAuthenticated, logout } = useAuth();
+  const [activeSection, setActiveSection] = useState<Section>("Inicio");
+  const [items, setItems] = useState<ContentItem[]>(demoItems);
+  const [query, setQuery] = useState("");
+  const [activeFilter, setActiveFilter] = useState<"all" | ContentType>("all");
+  const [view, setView] = useState<"grid" | "list">("grid");
+  const [showComposer, setShowComposer] = useState(false);
+  const [composerType, setComposerType] = useState<ContentType>("note");
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newBody, setNewBody] = useState("");
+  const [newCategory, setNewCategory] = useState("Sin organizar");
+  const [newPlatform, setNewPlatform] = useState("");
 
-  // If theme is switchable in App.tsx, we can implement theme toggling like this:
-  // const { theme, toggleTheme } = useTheme();
+  const contentQuery = trpc.content.list.useQuery(undefined, {
+    enabled: isAuthenticated,
+    retry: false,
+  });
+  const createContent = trpc.content.create.useMutation();
+  const updateContent = trpc.content.update.useMutation();
+
+  useEffect(() => {
+    if (isAuthenticated && contentQuery.data) {
+      setItems(contentQuery.data.length ? contentQuery.data.map(item => ({ ...item, tags: item.tags ?? "" })) : demoItems);
+    }
+  }, [contentQuery.data, isAuthenticated]);
+
+  const visibleItems = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return items.filter(item => {
+      const matchesQuery = !normalized || [item.title, item.description, item.body, item.category, item.tags, item.platform]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized);
+      const matchesType = activeFilter === "all" || item.type === activeFilter;
+      const matchesSection = activeSection === "Favoritos" ? item.isFavorite : activeSection === "Publicaciones" ? item.type === "publication" : true;
+      return matchesQuery && matchesType && matchesSection;
+    });
+  }, [activeFilter, activeSection, items, query]);
+
+  const stats = useMemo(() => ({
+    total: items.length,
+    ready: items.filter(item => item.status === "ready").length,
+    ideas: items.filter(item => item.status === "idea").length,
+    favorites: items.filter(item => item.isFavorite).length,
+  }), [items]);
+
+  const selectSection = (section: Section) => {
+    setActiveSection(section);
+    setMobileMenu(false);
+    if (section !== "Biblioteca") setActiveFilter("all");
+  };
+
+  const openComposer = (type: ContentType = "note") => {
+    setComposerType(type);
+    setShowComposer(true);
+  };
+
+  const resetComposer = () => {
+    setShowComposer(false);
+    setNewTitle("");
+    setNewBody("");
+    setNewCategory("Sin organizar");
+    setNewPlatform("");
+  };
+
+  const addItem = () => {
+    if (!newTitle.trim()) {
+      toast.error("Escribe un título para guardar el contenido.");
+      return;
+    }
+    const localItem: ContentItem = {
+      id: `local-${Date.now()}`,
+      type: composerType,
+      title: newTitle.trim(),
+      body: newBody.trim(),
+      description: newBody.trim() || "Contenido nuevo en tu biblioteca.",
+      category: newCategory,
+      tags: newPlatform ? newPlatform.toLowerCase() : "",
+      platform: newPlatform,
+      status: "idea",
+      isFavorite: false,
+    };
+
+    if (isAuthenticated) {
+      createContent.mutate({
+        type: composerType,
+        title: localItem.title,
+        body: localItem.body ?? undefined,
+        description: localItem.description ?? undefined,
+        category: localItem.category ?? undefined,
+        platform: localItem.platform ?? undefined,
+        tags: localItem.tags ?? undefined,
+        status: "idea",
+      }, {
+        onSuccess: created => {
+          setItems(current => [{ ...created, tags: created.tags ?? "" }, ...current]);
+          toast.success("Guardado en tu biblioteca.");
+          resetComposer();
+        },
+        onError: () => toast.error("No pudimos guardar el contenido. Inténtalo otra vez."),
+      });
+    } else {
+      setItems(current => [localItem, ...current]);
+      toast.success("Guardado en modo demo. Inicia sesión para conservarlo.");
+      resetComposer();
+    }
+  };
+
+  const toggleFavorite = (item: ContentItem) => {
+    const nextFavorite = !item.isFavorite;
+    setItems(current => current.map(entry => entry.id === item.id ? { ...entry, isFavorite: nextFavorite } : entry));
+    if (isAuthenticated && typeof item.id === "number") {
+      updateContent.mutate({ id: item.id, values: { isFavorite: nextFavorite } });
+    }
+  };
+
+  const copyItem = async (item: ContentItem) => {
+    const text = item.body || item.description || item.url || item.title;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Contenido copiado.");
+    } catch {
+      toast.info("Selecciona y copia el contenido desde la ficha.");
+    }
+  };
+
+  const shareItem = async (item: ContentItem) => {
+    const shareData = { title: item.title, text: item.description || item.body || item.title, url: item.url || window.location.href };
+    const canShare = typeof navigator.share === "function";
+    try {
+      if (canShare) await navigator.share(shareData);
+      else await navigator.clipboard.writeText(shareData.url);
+      toast.success(canShare ? "Contenido compartido." : "Enlace copiado.");
+    } catch {
+      toast.info("Puedes compartirlo cuando quieras.");
+    }
+  };
+
+  const displayName = user?.name?.split(" ")[0] || "tu biblioteca";
+  const title = activeSection === "Inicio" ? `Hola, ${displayName}` : activeSection;
+  const subtitle = activeSection === "Inicio" ? "Tu espacio para guardar lo que quieres volver a encontrar." : activeSection === "Favoritos" ? "Lo que marcaste para tener siempre a mano." : "Encuentra, organiza y reutiliza tu contenido.";
+
+  if (loading) {
+    return <div className="min-h-screen bg-[#f7f7f2] grid place-items-center text-[#687078]"><div className="flex items-center gap-3"><span className="h-2.5 w-2.5 rounded-full bg-[#ef795d] animate-pulse" /> Preparando tu espacio...</div></div>;
+  }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <main>
-        {/* Example: lucide-react for icons */}
-        <Loader2 className="animate-spin" />
-        Example Page
-        {/* Example: Streamdown for markdown rendering */}
-        <Streamdown>Any **markdown** content</Streamdown>
-        <Button variant="default">Example Button</Button>
+    <div className="min-h-screen bg-[#f7f7f2] text-[#253039] selection:bg-[#f2b4a4]/40">
+      {mobileMenu && <button aria-label="Cerrar menú" className="fixed inset-0 z-30 bg-[#24313a]/30 lg:hidden" onClick={() => setMobileMenu(false)} />}
+      <aside className={`fixed inset-y-0 left-0 z-40 flex w-[258px] flex-col border-r border-[#e7e5dd] bg-[#fbfbf7] px-5 py-6 transition-transform duration-200 lg:translate-x-0 ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}>
+        <div className="flex items-center justify-between px-2">
+          <button className="group flex items-center gap-3 text-left" onClick={() => selectSection("Inicio")}>
+            <span className="grid h-10 w-10 place-items-center rounded-[14px] bg-[#ef795d] text-white shadow-[0_8px_20px_rgba(239,121,93,.25)] transition-transform group-active:scale-95"><Sparkles size={19} /></span>
+            <span><span className="block font-serif text-[21px] leading-5 tracking-[-.02em] text-[#26333a]">Mi biblioteca</span><span className="mt-1 block text-[10px] font-bold uppercase tracking-[.18em] text-[#a5a9a3]">contenido personal</span></span>
+          </button>
+          <button className="rounded-lg p-2 text-[#89918d] lg:hidden" onClick={() => setMobileMenu(false)}><X size={18} /></button>
+        </div>
+
+        <button onClick={() => openComposer("note")} className="mt-10 flex h-12 items-center justify-center gap-2 rounded-[14px] bg-[#29373d] px-4 text-sm font-semibold text-white shadow-[0_10px_20px_rgba(41,55,61,.14)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={17} /> Crear contenido <kbd className="ml-auto hidden rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-normal text-white/70 xl:block">N</kbd></button>
+
+        <div className="mt-9 flex-1">
+          <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-[#a6aba6]">Espacio de trabajo</p>
+          <nav className="space-y-1">
+            {sections.map(({ label, icon: Icon }) => {
+              const active = activeSection === label;
+              return <button key={label} onClick={() => selectSection(label)} className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium transition ${active ? "bg-[#fff0eb] text-[#db674f]" : "text-[#68747a] hover:bg-[#f1f1eb] hover:text-[#28363c]"}`}><Icon size={17} strokeWidth={active ? 2.4 : 1.8} /><span>{label}</span>{label === "Favoritos" && <span className="ml-auto text-[11px] text-[#a6aaa6]">{stats.favorites}</span>}</button>;
+            })}
+            <button onClick={() => toast.info("La papelera estará disponible en la próxima versión.")} className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-[#68747a] transition hover:bg-[#f1f1eb] hover:text-[#28363c]"><Trash2 size={17} strokeWidth={1.8} /><span>Papelera</span></button>
+          </nav>
+
+          <p className="mb-3 mt-9 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-[#a6aba6]">Colecciones</p>
+          <div className="space-y-1.5 px-3">
+            {["Promociones", "Ideas", "Recursos de marca"].map((collection, index) => <button key={collection} onClick={() => { setActiveSection("Colecciones"); setQuery(collection); setMobileMenu(false); }} className="flex w-full items-center gap-2 text-left text-[12px] text-[#78817f] transition hover:text-[#28363c]"><span className={`h-2 w-2 rounded-full ${index === 0 ? "bg-[#ef795d]" : index === 1 ? "bg-[#b9a9ed]" : "bg-[#80c7a5]"}`} />{collection}</button>)}
+          </div>
+        </div>
+
+        <div className="border-t border-[#eceae2] pt-4">
+          <button onClick={() => toast.info("Ajustes de biblioteca en preparación.")} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-[#68747a] transition hover:bg-[#f1f1eb] hover:text-[#28363c]"><Settings2 size={17} strokeWidth={1.8} /> Ajustes</button>
+          {isAuthenticated ? <button onClick={() => logout()} className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[12px] text-[#9a817a] transition hover:text-[#db674f]"><span className="grid h-7 w-7 place-items-center rounded-full bg-[#f3d8d0] text-[11px] font-bold text-[#a85f4e]">{(user?.name || "U").slice(0, 1).toUpperCase()}</span><span className="truncate">{user?.name || "Mi cuenta"}</span><span className="ml-auto text-[10px]">Salir</span></button> : <button onClick={() => startLogin()} className="mt-1 flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-[#db674f]">Iniciar sesión <ArrowUpRight size={13} /></button>}
+        </div>
+      </aside>
+
+      <main className="min-h-screen lg:pl-[258px]">
+        <header className="sticky top-0 z-20 flex h-[76px] items-center justify-between border-b border-[#e8e6de]/80 bg-[#f7f7f2]/90 px-5 backdrop-blur-md sm:px-8 lg:px-11">
+          <div className="flex items-center gap-3"><button className="rounded-xl p-2 text-[#69757a] hover:bg-white lg:hidden" onClick={() => setMobileMenu(true)}><Menu size={20} /></button><div className="relative hidden w-[270px] sm:block"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa19d]" size={16} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Buscar en tu biblioteca..." className="h-10 w-full rounded-xl border border-[#e6e5dc] bg-white/70 pl-10 pr-12 text-[13px] text-[#344149] outline-none transition placeholder:text-[#aeb2ae] focus:border-[#efb0a0] focus:bg-white" /><kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md bg-[#f4f3ee] px-1.5 py-0.5 text-[10px] font-medium text-[#a0a49f]">⌘ K</kbd></div><span className="text-[12px] font-medium text-[#89928f] sm:hidden">{activeSection}</span></div>
+          <div className="flex items-center gap-2 sm:gap-4"><button className="relative rounded-xl p-2.5 text-[#7d8889] transition hover:bg-white hover:text-[#29373d]" onClick={() => toast.info("No tienes notificaciones nuevas.")}><Bell size={18} strokeWidth={1.8} /><span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#ef795d]" /></button>{!isAuthenticated && <button onClick={() => startLogin()} className="hidden rounded-xl bg-[#29373d] px-4 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#3b4b52] sm:block">Guardar mi contenido</button>}<button className="grid h-9 w-9 place-items-center rounded-full bg-[#d9e7df] text-[12px] font-bold text-[#46715e]" onClick={() => isAuthenticated ? toast.success("Tu cuenta está activa.") : startLogin()}>{(user?.name || "T").slice(0, 1).toUpperCase()}</button></div>
+        </header>
+
+        <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 lg:px-11 lg:py-10">
+          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.2em] text-[#ef795d]">{activeSection === "Inicio" ? "Tu espacio creativo" : "Biblioteca de contenido"}</p><h1 className="font-serif text-[35px] leading-none tracking-[-.04em] text-[#28363d] sm:text-[43px]">{title}</h1><p className="mt-3 text-[13px] text-[#7a8587]">{subtitle}</p></div><div className="flex items-center gap-2"><button onClick={() => openComposer("image")} className="flex items-center gap-2 rounded-xl border border-[#e1dfd6] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#56636a] shadow-sm transition hover:-translate-y-0.5 hover:border-[#efb0a0]"><ImageIcon size={15} /> <span className="hidden sm:inline">Subir archivo</span><span className="sm:hidden">Subir</span></button><button onClick={() => openComposer("note")} className="flex items-center gap-2 rounded-xl bg-[#ef795d] px-3.5 py-2.5 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(239,121,93,.2)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Nuevo</button></div></div>
+
+          {activeSection === "Inicio" && <>
+            <section className="mt-9 grid gap-4 md:grid-cols-[1.55fr_1fr_1fr]">
+              <div className="relative overflow-hidden rounded-[22px] bg-[#29373d] p-6 text-white shadow-[0_12px_30px_rgba(41,55,61,.12)] sm:p-7"><div className="relative z-10 max-w-[330px]"><span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.16em] text-[#f5c2b4]"><Zap size={12} /> En foco</span><h2 className="mt-5 font-serif text-[27px] leading-[1.06] tracking-[-.02em]">Tu próximo contenido puede empezar aquí.</h2><p className="mt-3 max-w-[280px] text-[12px] leading-5 text-white/60">Guarda una idea, reúne tus recursos y conviértela en una publicación lista para compartir.</p><button onClick={() => openComposer("publication")} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#ef795d] px-4 py-2.5 text-[12px] font-semibold transition hover:bg-[#f28b72]">Crear publicación <ArrowUpRight size={14} /></button></div><div className="absolute -right-10 -top-16 h-48 w-48 rounded-full border-[28px] border-[#ffffff0d]" /><div className="absolute -bottom-28 right-6 h-60 w-60 rounded-full border-[38px] border-[#ffffff08]" /></div>
+              <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-6"><div className="flex items-center justify-between"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#fff0eb] text-[#ef795d]"><Archive size={17} /></span><span className="text-[11px] font-medium text-[#a0a8a5]">Total</span></div><p className="mt-6 text-[35px] font-semibold tracking-[-.05em] text-[#29373d]">{stats.total}</p><p className="mt-1 text-[12px] text-[#84908d]">elementos guardados</p><div className="mt-5 h-1.5 overflow-hidden rounded-full bg-[#f3f2ec]"><div className="h-full w-[68%] rounded-full bg-[#ef795d]" /></div></div>
+              <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-6"><div className="flex items-center justify-between"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#e8f4ed] text-[#4d9975]"><Check size={17} /></span><span className="text-[11px] font-medium text-[#a0a8a5]">Estado</span></div><p className="mt-6 text-[35px] font-semibold tracking-[-.05em] text-[#29373d]">{stats.ready}</p><p className="mt-1 text-[12px] text-[#84908d]">listos para publicar</p><div className="mt-5 flex -space-x-1.5"><span className="h-5 w-5 rounded-full border-2 border-white bg-[#f1c7b9]" /><span className="h-5 w-5 rounded-full border-2 border-white bg-[#c8bdf0]" /><span className="h-5 w-5 rounded-full border-2 border-white bg-[#b7d9c5]" /></div></div>
+            </section>
+            <div className="mb-8 mt-11 flex items-center justify-between"><div><h2 className="font-serif text-[25px] tracking-[-.03em] text-[#29373d]">Añadido recientemente</h2><p className="mt-1 text-[12px] text-[#8a9491]">Lo último que vive en tu biblioteca.</p></div><button onClick={() => selectSection("Biblioteca")} className="flex items-center gap-1.5 text-[12px] font-semibold text-[#db674f] transition hover:gap-2.5">Ver todo <ArrowUpRight size={14} /></button></div>
+          </>}
+
+          <section className={activeSection === "Inicio" ? "" : "mt-9"}>
+            <div className="mb-5 flex flex-col gap-3 rounded-[18px] border border-[#ebe9e0] bg-white/60 p-2.5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-1 overflow-x-auto"><button onClick={() => setActiveFilter("all")} className={`shrink-0 rounded-xl px-3 py-2 text-[11px] font-semibold transition ${activeFilter === "all" ? "bg-[#29373d] text-white" : "text-[#7c8786] hover:bg-[#f1f1eb]"}`}>Todo</button>{(["image", "note", "link", "publication"] as ContentType[]).map(type => <button key={type} onClick={() => setActiveFilter(type)} className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-[11px] font-semibold capitalize transition ${activeFilter === type ? "bg-[#fff0eb] text-[#db674f]" : "text-[#7c8786] hover:bg-[#f1f1eb]"}`}><TypeIcon type={type} size={13} />{type === "image" ? "Fotos" : type === "note" ? "Notas" : type === "link" ? "Enlaces" : "Publicaciones"}</button>)}</div><div className="flex items-center justify-between gap-2 px-1 sm:justify-end"><button onClick={() => setQuery("")} className="flex items-center gap-1.5 text-[11px] text-[#9aa19d] hover:text-[#db674f]"><Filter size={13} /> {query ? `Filtrado por “${query}”` : "Filtros"}</button><span className="h-4 w-px bg-[#e8e7df]" /><button onClick={() => setView("grid")} className={`rounded-lg p-1.5 ${view === "grid" ? "bg-[#f0efea] text-[#3b4a4f]" : "text-[#a0a8a5]"}`}><Grid2X2 size={15} /></button><button onClick={() => setView("list")} className={`rounded-lg p-1.5 ${view === "list" ? "bg-[#f0efea] text-[#3b4a4f]" : "text-[#a0a8a5]"}`}><List size={15} /></button></div></div>
+
+            {visibleItems.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#dddcd2] bg-white/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#fff0eb] text-[#ef795d]"><Search size={20} /></span><h3 className="mt-4 font-serif text-[21px] text-[#29373d]">No encontramos nada</h3><p className="mt-2 text-[12px] text-[#8b9492]">Prueba con otra palabra o crea un contenido nuevo.</p><button onClick={() => { setQuery(""); setActiveFilter("all"); }} className="mt-5 rounded-xl bg-[#29373d] px-4 py-2.5 text-[12px] font-semibold text-white">Limpiar filtros</button></div> : <div className={view === "grid" ? "grid gap-4 sm:grid-cols-2 xl:grid-cols-3" : "space-y-3"}>{visibleItems.map((item, index) => <ContentCard key={item.id} item={item} index={index} view={view} onFavorite={() => toggleFavorite(item)} onCopy={() => copyItem(item)} onShare={() => shareItem(item)} />)}</div>}
+          </section>
+
+          <div className="mt-12 grid gap-4 lg:grid-cols-[1.35fr_1fr]">
+            <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-6 sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#a4aaa5]">Acceso rápido</p><h2 className="mt-2 font-serif text-[23px] tracking-[-.03em]">Guardar sin pensarlo mucho</h2></div><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f2f0ff] text-[#7967cf]"><Sparkles size={17} /></span></div><div className="mt-6 grid gap-2 sm:grid-cols-3"><QuickAction icon={<NotebookPen size={17} />} label="Nueva nota" tone="purple" onClick={() => openComposer("note")} /><QuickAction icon={<Link2 size={17} />} label="Guardar enlace" tone="green" onClick={() => openComposer("link")} /><QuickAction icon={<ImageIcon size={17} />} label="Subir foto" tone="orange" onClick={() => openComposer("image")} /></div></div>
+            <div className="rounded-[22px] bg-[#fff1ec] p-6 sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#c67564]">Próximo paso</p><h2 className="mt-2 font-serif text-[23px] leading-tight tracking-[-.03em] text-[#533b37]">Tienes {stats.ideas} ideas esperando convertirse en algo.</h2></div><span className="text-[28px]">✦</span></div><button onClick={() => { setActiveSection("Biblioteca"); setActiveFilter("note"); }} className="mt-6 inline-flex items-center gap-1.5 text-[12px] font-bold text-[#c55f4c]">Ver mis ideas <ArrowUpRight size={14} /></button></div>
+          </div>
+
+          <footer className="mt-12 flex flex-col justify-between gap-2 border-t border-[#e7e5dd] py-6 text-[11px] text-[#a0a7a3] sm:flex-row"><span>Biblioteca de Contenido · Tu espacio, a tu ritmo.</span><span>{isAuthenticated ? "Sincronizado" : "Modo demo · inicia sesión para guardar"}</span></footer>
+        </div>
       </main>
+
+      {showComposer && <Composer type={composerType} setType={setComposerType} title={newTitle} body={newBody} category={newCategory} platform={newPlatform} setTitle={setNewTitle} setBody={setNewBody} setCategory={setNewCategory} setPlatform={setNewPlatform} onClose={resetComposer} onSave={addItem} saving={createContent.isPending} />}
     </div>
   );
+}
+
+function ContentCard({ item, index, view, onFavorite, onCopy, onShare }: { item: ContentItem; index: number; view: "grid" | "list"; onFavorite: () => void; onCopy: () => void; onShare: () => void }) {
+  const status = statusCopy[item.status];
+  const tags = (item.tags || "").split(",").map(tag => tag.trim()).filter(Boolean).slice(0, 2);
+  if (view === "list") return <article className="group flex items-center gap-4 rounded-[18px] border border-[#ebe9e0] bg-white p-3.5 transition hover:-translate-y-0.5 hover:shadow-[0_10px_24px_rgba(61,70,65,.08)]"><div className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl ${item.image ? "bg-cover bg-center" : "bg-[#f1f0ea] text-[#8d9892]"}`} style={item.image ? { backgroundImage: `url(${item.image})` } : undefined}>{!item.image && <TypeIcon type={item.type} />}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[13px] font-semibold text-[#344149]">{item.title}</h3><span className={`hidden rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline ${status.className}`}>{status.label}</span></div><p className="mt-1 truncate text-[11px] text-[#8d9795]">{item.description || item.body || item.url}</p></div><span className="hidden text-[11px] text-[#a3aaa6] sm:block">{item.category}</span><button onClick={onFavorite} className={`rounded-lg p-2 transition ${item.isFavorite ? "text-[#ef795d]" : "text-[#b4bbb6] hover:text-[#ef795d]"}`}><Heart size={15} fill={item.isFavorite ? "currentColor" : "none"} /></button><button onClick={onCopy} className="rounded-lg p-2 text-[#a6aeaa] hover:bg-[#f4f3ed] hover:text-[#344149]"><Copy size={15} /></button></article>;
+  return <article className="group overflow-hidden rounded-[20px] border border-[#ebe9e0] bg-white transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_rgba(61,70,65,.09)]" style={{ animationDelay: `${index * 35}ms` }}><div className={`relative ${item.image ? "h-[168px]" : "h-[148px]"} overflow-hidden ${item.image ? "bg-cover bg-center" : item.type === "link" ? "bg-[#eef3f1]" : item.type === "publication" ? "bg-[#fff0eb]" : "bg-[#f0edff]"}`} style={item.image ? { backgroundImage: `url(${item.image})` } : undefined}>{!item.image && <div className="absolute inset-0 grid place-items-center"><span className={`grid h-12 w-12 place-items-center rounded-2xl ${item.type === "link" ? "bg-white text-[#5a9a7a]" : item.type === "publication" ? "bg-white text-[#ef795d]" : "bg-white text-[#7765cf]"} shadow-sm`}><TypeIcon type={item.type} size={21} /></span></div>}<div className="absolute left-3 top-3 flex items-center gap-1.5"><span className="rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-semibold text-[#5d696d] backdrop-blur-sm"><TypeIcon type={item.type} size={11} /></span><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${status.className}`}>{status.label}</span></div><div className="absolute right-3 top-3 flex gap-1 opacity-0 transition group-hover:opacity-100"><button onClick={onFavorite} className={`grid h-8 w-8 place-items-center rounded-full bg-white/90 backdrop-blur-sm transition ${item.isFavorite ? "text-[#ef795d]" : "text-[#6e7979] hover:text-[#ef795d]"}`}><Heart size={14} fill={item.isFavorite ? "currentColor" : "none"} /></button><button onClick={onShare} className="grid h-8 w-8 place-items-center rounded-full bg-white/90 text-[#6e7979] backdrop-blur-sm hover:text-[#344149]"><Send size={14} /></button></div></div><div className="p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-[14px] font-semibold text-[#344149]">{item.title}</h3><p className="mt-1.5 line-clamp-2 min-h-[32px] text-[11px] leading-4 text-[#8b9593]">{item.description || item.body || item.url || "Sin descripción todavía."}</p></div><button onClick={onFavorite} className={`shrink-0 rounded-lg p-1 transition ${item.isFavorite ? "text-[#ef795d]" : "text-[#b6bdb8] opacity-0 group-hover:opacity-100 hover:text-[#ef795d]"}`}><Heart size={15} fill={item.isFavorite ? "currentColor" : "none"} /></button></div><div className="mt-4 flex items-center justify-between"><div className="flex min-w-0 items-center gap-1.5">{tags.map(tag => <span key={tag} className="max-w-[100px] truncate rounded-md bg-[#f5f4ee] px-2 py-1 text-[10px] text-[#8b9490]">#{tag}</span>)}{item.category && <span className="truncate text-[10px] text-[#a5aba7]">{item.category}</span>}</div><span className="shrink-0 text-[10px] text-[#b0b5b1]">{formatDate(item.createdAt)}</span></div></div></article>;
+}
+
+function QuickAction({ icon, label, tone, onClick }: { icon: React.ReactNode; label: string; tone: "purple" | "green" | "orange"; onClick: () => void }) {
+  const tones = { purple: "bg-[#f0edff] text-[#7864cd]", green: "bg-[#e8f4ed] text-[#4a9874]", orange: "bg-[#fff0eb] text-[#e7755b]" };
+  return <button onClick={onClick} className="flex items-center gap-2.5 rounded-xl border border-[#efeee8] bg-[#fcfcf9] px-3 py-3 text-left text-[11px] font-semibold text-[#627075] transition hover:-translate-y-0.5 hover:border-[#dddcd2] hover:bg-white"><span className={`grid h-8 w-8 place-items-center rounded-lg ${tones[tone]}`}>{icon}</span><span>{label}</span></button>;
+}
+
+function Composer({ type, setType, title, body, category, platform, setTitle, setBody, setCategory, setPlatform, onClose, onSave, saving }: { type: ContentType; setType: (value: ContentType) => void; title: string; body: string; category: string; platform: string; setTitle: (value: string) => void; setBody: (value: string) => void; setCategory: (value: string) => void; setPlatform: (value: string) => void; onClose: () => void; onSave: () => void; saving: boolean }) {
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[540px] rounded-t-[26px] border border-white/80 bg-[#fbfbf7] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Nuevo contenido</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#29373d]">Añade algo a tu espacio</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#f0f0ea] hover:text-[#3e4b50]"><X size={18} /></button></div><div className="mt-6 grid grid-cols-4 gap-2">{(["note", "link", "image", "publication"] as ContentType[]).map(option => <button key={option} onClick={() => setType(option)} className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-[10px] font-semibold transition ${type === option ? "border-[#f2b2a1] bg-[#fff0eb] text-[#d9674e]" : "border-[#e8e7df] text-[#8d9692] hover:bg-white"}`}><TypeIcon type={option} size={16} />{option === "note" ? "Nota" : option === "link" ? "Enlace" : option === "image" ? "Foto" : "Publicación"}</button>)}</div><div className="mt-5 space-y-3"><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="Título del contenido" className="h-12 w-full rounded-xl border border-[#e4e3da] bg-white px-4 text-[13px] font-medium text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><textarea value={body} onChange={event => setBody(event.target.value)} placeholder={type === "link" ? "Pega aquí el enlace o escribe una nota sobre él..." : "Escribe una idea, texto o contexto para volver a encontrarlo..."} className="min-h-[112px] w-full resize-none rounded-xl border border-[#e4e3da] bg-white px-4 py-3 text-[13px] leading-5 text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><div className="grid gap-3 sm:grid-cols-2"><div className="relative"><Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={category} onChange={event => setCategory(event.target.value)} placeholder="Categoría" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div><div className="relative"><Send className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={platform} onChange={event => setPlatform(event.target.value)} placeholder="Plataforma (opcional)" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div></div></div><div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#7c8785] hover:bg-[#f0f0ea]">Cancelar</button><button onClick={onSave} disabled={saving} className="flex items-center gap-2 rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#3e4e55] disabled:cursor-wait disabled:opacity-70">{saving ? "Guardando..." : "Guardar en biblioteca"}<ArrowUpRight size={14} /></button></div></div></div>;
 }
