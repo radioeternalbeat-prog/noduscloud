@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { contentItems, InsertContentItem, InsertShareLink, InsertUser, shareLinks, users } from "../drizzle/schema";
+import { contentItems, InsertContentItem, InsertPublicationProfile, InsertShareLink, InsertUser, publicationProfiles, shareLinks, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -130,4 +130,42 @@ export async function getSharedContent(link: NonNullable<Awaited<ReturnType<type
     return db.select().from(contentItems).where(and(eq(contentItems.userId, link.userId), eq(contentItems.category, link.collectionName))).orderBy(desc(contentItems.updatedAt));
   }
   return [];
+}
+
+
+export async function listPublicationProfiles(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(publicationProfiles).where(eq(publicationProfiles.userId, userId)).orderBy(desc(publicationProfiles.createdAt));
+}
+
+export async function createPublicationProfile(profile: InsertPublicationProfile) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const result = await db.insert(publicationProfiles).values(profile);
+  const rows = await db.select().from(publicationProfiles).where(eq(publicationProfiles.id, Number(result[0].insertId))).limit(1);
+  return rows[0];
+}
+
+export async function updatePublicationProfile(id: number, userId: number, values: Partial<InsertPublicationProfile>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(publicationProfiles).set(values).where(and(eq(publicationProfiles.id, id), eq(publicationProfiles.userId, userId)));
+  const rows = await db.select().from(publicationProfiles).where(and(eq(publicationProfiles.id, id), eq(publicationProfiles.userId, userId))).limit(1);
+  return rows[0];
+}
+
+export async function deletePublicationProfile(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.delete(publicationProfiles).where(and(eq(publicationProfiles.id, id), eq(publicationProfiles.userId, userId)));
+  return { success: true } as const;
+}
+
+
+export async function getContentItem(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(contentItems).where(and(eq(contentItems.id, id), eq(contentItems.userId, userId))).limit(1);
+  return rows[0];
 }

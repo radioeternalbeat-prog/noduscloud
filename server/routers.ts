@@ -4,8 +4,9 @@ import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { createContentItem, createShareLink, deactivateShareLink, deleteContentItem, getSharedContent, getShareLinkByToken, listContentItems, listShareLinks, updateContentItem } from "./db";
+import { createContentItem, createPublicationProfile, createShareLink, deactivateShareLink, deleteContentItem, deletePublicationProfile, getContentItem, getSharedContent, getShareLinkByToken, listContentItems, listPublicationProfiles, listShareLinks, updateContentItem, updatePublicationProfile } from "./db";
 import { storagePut } from "./storage";
+import { instagramConfigStatus, publishToInstagram } from "./instagram";
 
 const contentInput = z.object({
   type: z.enum(["image", "video", "note", "link", "publication"]),
@@ -18,6 +19,7 @@ const contentInput = z.object({
   tags: z.string().optional(),
   status: z.enum(["idea", "draft", "ready", "published"]).optional(),
   platform: z.string().max(80).optional(),
+  profileId: z.number().optional(),
   isFavorite: z.boolean().optional(),
   scheduledAt: z.string().optional(),
 });
@@ -52,6 +54,22 @@ export const appRouter = router({
       return updateContentItem(input.id, ctx.user.id, { ...rest, ...(scheduledAt !== undefined ? { scheduledAt: toDate(scheduledAt) } : {}) });
     }),
     remove: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ ctx, input }) => deleteContentItem(input.id, ctx.user.id)),
+  }),
+  profiles: router({
+    list: protectedProcedure.query(({ ctx }) => listPublicationProfiles(ctx.user.id)),
+    create: protectedProcedure.input(z.object({ name: z.string().min(1).max(100), contentType: z.enum(["image", "video", "publication", "all"]).default("all"), platform: z.string().max(80).default("Instagram"), tone: z.string().max(80).optional(), captionTemplate: z.string().optional(), hashtags: z.string().optional(), videoQuality: z.enum(["original", "1080p", "720p", "480p"]).default("1080p"), isDefault: z.boolean().default(false) })).mutation(({ ctx, input }) => createPublicationProfile({ ...input, userId: ctx.user.id })),
+    update: protectedProcedure.input(z.object({ id: z.number(), values: z.object({ name: z.string().min(1).max(100).optional(), contentType: z.enum(["image", "video", "publication", "all"]).optional(), platform: z.string().max(80).optional(), tone: z.string().max(80).optional(), captionTemplate: z.string().optional(), hashtags: z.string().optional(), videoQuality: z.enum(["original", "1080p", "720p", "480p"]).optional(), isDefault: z.boolean().optional() }) })).mutation(({ ctx, input }) => updatePublicationProfile(input.id, ctx.user.id, input.values)),
+    remove: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ ctx, input }) => deletePublicationProfile(input.id, ctx.user.id)),
+  }),
+  instagram: router({
+    status: protectedProcedure.query(() => instagramConfigStatus()),
+    publish: protectedProcedure.input(z.object({ contentId: z.number(), caption: z.string().max(2200).optional(), mediaType: z.enum(["IMAGE", "REELS"]) })).mutation(async ({ ctx, input }) => {
+      const content = await getContentItem(input.contentId, ctx.user.id);
+      if (!content?.fileUrl) throw new Error("El contenido debe tener un archivo público para publicarse en Instagram.");
+      const result = await publishToInstagram({ mediaUrl: content.fileUrl, mediaType: input.mediaType, caption: input.caption || content.body || content.description || content.title });
+      await updateContentItem(content.id, ctx.user.id, { status: "published", platform: "Instagram" });
+      return result;
+    }),
   }),
   share: router({
     mine: protectedProcedure.query(({ ctx }) => listShareLinks(ctx.user.id)),

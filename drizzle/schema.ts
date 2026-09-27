@@ -25,8 +25,24 @@ export const contentItems = mysqlTable("content_items", {
   tags: text("tags"),
   status: mysqlEnum("status", ["idea", "draft", "ready", "published"]).notNull().default("idea"),
   platform: varchar("platform", { length: 80 }),
+  profileId: int("profileId"),
   isFavorite: boolean("isFavorite").notNull().default(false),
   scheduledAt: timestamp("scheduledAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const publicationProfiles = mysqlTable("publication_profiles", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  name: varchar("name", { length: 100 }).notNull(),
+  contentType: mysqlEnum("contentType", ["image", "video", "publication", "all"]).notNull().default("all"),
+  platform: varchar("platform", { length: 80 }).notNull().default("Instagram"),
+  tone: varchar("tone", { length: 80 }).default("Cercano y claro"),
+  captionTemplate: text("captionTemplate"),
+  hashtags: text("hashtags"),
+  videoQuality: mysqlEnum("videoQuality", ["original", "1080p", "720p", "480p"]).notNull().default("1080p"),
+  isDefault: boolean("isDefault").notNull().default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -48,5 +64,7 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type ContentItem = typeof contentItems.$inferSelect;
 export type InsertContentItem = typeof contentItems.$inferInsert;
+export type PublicationProfile = typeof publicationProfiles.$inferSelect;
+export type InsertPublicationProfile = typeof publicationProfiles.$inferInsert;
 export type ShareLink = typeof shareLinks.$inferSelect;
 export type InsertShareLink = typeof shareLinks.$inferInsert;

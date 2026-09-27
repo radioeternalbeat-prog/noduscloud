@@ -40,7 +40,8 @@ import { toast } from "sonner";
 
 type ContentType = "image" | "video" | "note" | "link" | "publication";
 type Status = "idea" | "draft" | "ready" | "published";
-type Section = "Inicio" | "Biblioteca" | "Publicaciones" | "Calendario" | "Colecciones" | "Favoritos" | "Enlaces compartidos" | "Papelera";
+type VideoQuality = "original" | "1080p" | "720p" | "480p";
+type Section = "Inicio" | "Biblioteca" | "Publicaciones" | "Calendario" | "Colecciones" | "Favoritos" | "Enlaces compartidos" | "Perfiles de publicación" | "Papelera";
 
 type ContentItem = {
   id: number | string;
@@ -55,9 +56,22 @@ type ContentItem = {
   tags?: string | null;
   status: Status;
   platform?: string | null;
+  profileId?: number | null;
   isFavorite: boolean;
   createdAt?: Date | string;
   scheduledAt?: Date | string | null;
+};
+
+type PublicationProfile = {
+  id: number;
+  name: string;
+  contentType: "image" | "video" | "publication" | "all";
+  platform: string;
+  tone?: string | null;
+  captionTemplate?: string | null;
+  hashtags?: string | null;
+  videoQuality: VideoQuality;
+  isDefault: boolean;
 };
 
 const demoItems: ContentItem[] = [
@@ -143,6 +157,7 @@ const sections: { label: Section; icon: typeof Inbox }[] = [
   { label: "Colecciones", icon: FolderHeart },
   { label: "Favoritos", icon: Heart },
   { label: "Enlaces compartidos", icon: Link2 },
+  { label: "Perfiles de publicación", icon: Settings2 },
 ];
 
 const statusCopy: Record<Status, { label: string; className: string }> = {
@@ -165,8 +180,9 @@ function formatDate(date?: Date | string) {
   return new Date(date).toLocaleDateString("es-ES", { day: "numeric", month: "short" });
 }
 
-async function prepareUploadFile(file: File) {
+async function prepareUploadFile(file: File, quality: VideoQuality) {
   if (!file.type.startsWith("image/")) {
+    if (file.type.startsWith("video/") && quality !== "original") return compressVideo(file, quality);
     return { dataUrl: await readAsDataUrl(file), contentType: file.type, fileName: file.name, compressed: false };
   }
   const bitmap = await createImageBitmap(file);
@@ -208,6 +224,8 @@ export default function Home() {
   const [newCategory, setNewCategory] = useState("Sin organizar");
   const [newPlatform, setNewPlatform] = useState("");
   const [newScheduledAt, setNewScheduledAt] = useState("");
+  const [newProfileId, setNewProfileId] = useState<number | undefined>(undefined);
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>("1080p");
   const [shareTarget, setShareTarget] = useState<{ kind: "content" | "collection"; title: string; contentId?: number; collectionName?: string } | null>(null);
   const [shareUrl, setShareUrl] = useState("");
   const [shareId, setShareId] = useState<number | null>(null);
@@ -223,6 +241,11 @@ export default function Home() {
   const createShare = trpc.share.create.useMutation();
   const deactivateShare = trpc.share.deactivate.useMutation();
   const shareLinksQuery = trpc.share.mine.useQuery(undefined, { enabled: isAuthenticated, retry: false });
+  const profilesQuery = trpc.profiles.list.useQuery(undefined, { enabled: isAuthenticated, retry: false });
+  const createProfile = trpc.profiles.create.useMutation();
+  const removeProfile = trpc.profiles.remove.useMutation();
+  const instagramStatus = trpc.instagram.status.useQuery(undefined, { enabled: isAuthenticated, retry: false });
+  const publishInstagram = trpc.instagram.publish.useMutation();
 
   useEffect(() => {
     if (isAuthenticated && contentQuery.data) {
@@ -269,6 +292,7 @@ export default function Home() {
     setNewCategory("Sin organizar");
     setNewPlatform("");
     setNewScheduledAt("");
+    setNewProfileId(undefined);
   };
 
   const handleFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -289,9 +313,9 @@ export default function Home() {
         toast.error(`${file.name} supera el límite de 45 MB.`);
         continue;
       }
-      const prepared = await prepareUploadFile(file);
-      const base64 = prepared.dataUrl.split(",")[1] || "";
       try {
+        const prepared = await prepareUploadFile(file, videoQuality);
+        const base64 = prepared.dataUrl.split(",")[1] || "";
         const uploaded = await uploadFile.mutateAsync({ fileName: prepared.fileName, contentType: prepared.contentType, dataBase64: base64 });
         setItems(current => [{ ...uploaded, tags: uploaded.tags ?? "", image: uploaded.type === "image" ? uploaded.fileUrl ?? undefined : undefined }, ...current]);
         toast.success(prepared.compressed ? `${file.name} se optimizó y ya está en tu biblioteca.` : `${file.name} ya está en tu biblioteca.`);
@@ -315,6 +339,7 @@ export default function Home() {
       category: newCategory,
       tags: newPlatform ? newPlatform.toLowerCase() : "",
       platform: newPlatform,
+      profileId: newProfileId,
       status: newScheduledAt ? "ready" : "idea",
       scheduledAt: newScheduledAt || null,
       isFavorite: false,
@@ -328,6 +353,7 @@ export default function Home() {
         description: localItem.description ?? undefined,
         category: localItem.category ?? undefined,
         platform: localItem.platform ?? undefined,
+        profileId: newProfileId,
         tags: localItem.tags ?? undefined,
         status: newScheduledAt ? "ready" : "idea",
         scheduledAt: newScheduledAt || undefined,
@@ -416,7 +442,7 @@ export default function Home() {
 
   const displayName = user?.name?.split(" ")[0] || "tu biblioteca";
   const title = activeSection === "Inicio" ? `Hola, ${displayName}` : activeSection;
-  const subtitle = activeSection === "Inicio" ? "Tu espacio para guardar lo que quieres volver a encontrar." : activeSection === "Favoritos" ? "Lo que marcaste para tener siempre a mano." : activeSection === "Enlaces compartidos" ? "Controla quién puede ver tus notas y colecciones." : "Encuentra, organiza y reutiliza tu contenido.";
+  const subtitle = activeSection === "Inicio" ? "Tu espacio para guardar lo que quieres volver a encontrar." : activeSection === "Favoritos" ? "Lo que marcaste para tener siempre a mano." : activeSection === "Enlaces compartidos" ? "Controla quién puede ver tus notas y colecciones." : activeSection === "Perfiles de publicación" ? "Define un estilo, plataforma y calidad para cada tipo de contenido." : "Encuentra, organiza y reutiliza tu contenido.";
 
   if (loading) {
     return <div className="min-h-screen bg-[#f7f7f2] grid place-items-center text-[#687078]"><div className="flex items-center gap-3"><span className="h-2.5 w-2.5 rounded-full bg-[#ef795d] animate-pulse" /> Preparando tu espacio...</div></div>;
@@ -466,7 +492,7 @@ export default function Home() {
         </header>
 
         <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 lg:px-11 lg:py-10">
-          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.2em] text-[#ef795d]">{activeSection === "Inicio" ? "Tu espacio creativo" : "Biblioteca de contenido"}</p><h1 className="font-serif text-[35px] leading-none tracking-[-.04em] text-[#28363d] sm:text-[43px]">{title}</h1><p className="mt-3 text-[13px] text-[#7a8587]">{subtitle}</p></div><div className="flex items-center gap-2"><button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 rounded-xl border border-[#e1dfd6] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#56636a] shadow-sm transition hover:-translate-y-0.5 hover:border-[#efb0a0]"><ImageIcon size={15} /> <span className="hidden sm:inline">Subir archivo</span><span className="sm:hidden">Subir</span></button><button onClick={() => openComposer("note")} className="flex items-center gap-2 rounded-xl bg-[#ef795d] px-3.5 py-2.5 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(239,121,93,.2)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Nuevo</button></div></div>
+          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.2em] text-[#ef795d]">{activeSection === "Inicio" ? "Tu espacio creativo" : "Biblioteca de contenido"}</p><h1 className="font-serif text-[35px] leading-none tracking-[-.04em] text-[#28363d] sm:text-[43px]">{title}</h1><p className="mt-3 text-[13px] text-[#7a8587]">{subtitle}</p></div><div className="flex items-center gap-2"><select aria-label="Calidad de video" title="Calidad de video" value={videoQuality} onChange={event => setVideoQuality(event.target.value as VideoQuality)} className="hidden h-10 rounded-xl border border-[#e1dfd6] bg-white px-2 text-[11px] font-semibold text-[#667276] outline-none sm:block"><option value="original">Video original</option><option value="1080p">Alta · 1080p</option><option value="720p">Equilibrada · 720p</option><option value="480p">Ligera · 480p</option></select><button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 rounded-xl border border-[#e1dfd6] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#56636a] shadow-sm transition hover:-translate-y-0.5 hover:border-[#efb0a0]"><ImageIcon size={15} /> <span className="hidden sm:inline">Subir archivo</span><span className="sm:hidden">Subir</span></button><button onClick={() => openComposer("note")} className="flex items-center gap-2 rounded-xl bg-[#ef795d] px-3.5 py-2.5 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(239,121,93,.2)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Nuevo</button></div></div>
 
           {activeSection === "Inicio" && <>
             <section className="mt-9 grid gap-4 md:grid-cols-[1.55fr_1fr_1fr]">
@@ -479,9 +505,10 @@ export default function Home() {
 
           {activeSection === "Calendario" && <CalendarPanel items={items} onSchedule={scheduleItem} onStatus={changeStatus} />}
           {activeSection === "Enlaces compartidos" && <ShareAdminPanel links={shareLinksQuery.data || []} onDeactivate={id => deactivateShare.mutate({ id }, { onSuccess: () => { toast.success("Enlace desactivado."); shareLinksQuery.refetch(); } })} />}
-          {activeSection === "Publicaciones" && <PublishPanel items={items.filter(item => item.type === "publication" || item.status === "ready")} onShare={shareExternally} />}
+          {activeSection === "Perfiles de publicación" && <ProfilePanel profiles={profilesQuery.data || []} onCreate={profile => createProfile.mutate(profile, { onSuccess: () => { toast.success("Perfil creado."); profilesQuery.refetch(); }, onError: error => toast.error(error.message || "No se pudo crear el perfil.") })} onRemove={id => removeProfile.mutate({ id }, { onSuccess: () => { toast.success("Perfil eliminado."); profilesQuery.refetch(); } })} />}
+          {activeSection === "Publicaciones" && <PublishPanel items={items.filter(item => item.type === "publication" || item.status === "ready")} instagramReady={Boolean(instagramStatus.data?.configured)} onShare={shareExternally} onInstagramPublish={item => { if (typeof item.id !== "number" || (item.type !== "image" && item.type !== "video")) { toast.info("Guarda primero una foto o video real para publicarlo."); return; } publishInstagram.mutate({ contentId: item.id, mediaType: item.type === "video" ? "REELS" : "IMAGE" }, { onSuccess: () => { setItems(current => current.map(entry => entry.id === item.id ? { ...entry, status: "published", platform: "Instagram" } : entry)); toast.success("Publicado en Instagram."); }, onError: error => toast.error(error.message || "No se pudo publicar en Instagram.") }); }} />}
 
-          <section className={activeSection === "Inicio" || activeSection === "Calendario" ? "mt-8" : "mt-9"} style={{ display: activeSection === "Enlaces compartidos" ? "none" : undefined }}>
+          <section className={activeSection === "Inicio" || activeSection === "Calendario" ? "mt-8" : "mt-9"} style={{ display: activeSection === "Enlaces compartidos" || activeSection === "Perfiles de publicación" ? "none" : undefined }}>
             <div className="mb-5 flex flex-col gap-3 rounded-[18px] border border-[#ebe9e0] bg-white/60 p-2.5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-1 overflow-x-auto"><button onClick={() => setActiveFilter("all")} className={`shrink-0 rounded-xl px-3 py-2 text-[11px] font-semibold transition ${activeFilter === "all" ? "bg-[#29373d] text-white" : "text-[#7c8786] hover:bg-[#f1f1eb]"}`}>Todo</button>{(["image", "note", "link", "publication"] as ContentType[]).map(type => <button key={type} onClick={() => setActiveFilter(type)} className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-[11px] font-semibold capitalize transition ${activeFilter === type ? "bg-[#fff0eb] text-[#db674f]" : "text-[#7c8786] hover:bg-[#f1f1eb]"}`}><TypeIcon type={type} size={13} />{type === "image" ? "Fotos" : type === "note" ? "Notas" : type === "link" ? "Enlaces" : "Publicaciones"}</button>)}</div><div className="flex items-center justify-between gap-2 px-1 sm:justify-end"><button onClick={() => setQuery("")} className="flex items-center gap-1.5 text-[11px] text-[#9aa19d] hover:text-[#db674f]"><Filter size={13} /> {query ? `Filtrado por “${query}”` : "Filtros"}</button><span className="h-4 w-px bg-[#e8e7df]" /><button onClick={() => setView("grid")} className={`rounded-lg p-1.5 ${view === "grid" ? "bg-[#f0efea] text-[#3b4a4f]" : "text-[#a0a8a5]"}`}><Grid2X2 size={15} /></button><button onClick={() => setView("list")} className={`rounded-lg p-1.5 ${view === "list" ? "bg-[#f0efea] text-[#3b4a4f]" : "text-[#a0a8a5]"}`}><List size={15} /></button></div></div>
 
             {visibleItems.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#dddcd2] bg-white/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#fff0eb] text-[#ef795d]"><Search size={20} /></span><h3 className="mt-4 font-serif text-[21px] text-[#29373d]">No encontramos nada</h3><p className="mt-2 text-[12px] text-[#8b9492]">Prueba con otra palabra o crea un contenido nuevo.</p><button onClick={() => { setQuery(""); setActiveFilter("all"); }} className="mt-5 rounded-xl bg-[#29373d] px-4 py-2.5 text-[12px] font-semibold text-white">Limpiar filtros</button></div> : <div className={view === "grid" ? "grid gap-4 sm:grid-cols-2 xl:grid-cols-3" : "space-y-3"}>{visibleItems.map((item, index) => <ContentCard key={item.id} item={item} index={index} view={view} onFavorite={() => toggleFavorite(item)} onCopy={() => copyItem(item)} onShare={() => openShare(item)} />)}</div>}
@@ -496,7 +523,7 @@ export default function Home() {
         </div>
       </main>
 
-      {showComposer && <Composer type={composerType} setType={setComposerType} title={newTitle} body={newBody} category={newCategory} platform={newPlatform} scheduledAt={newScheduledAt} setTitle={setNewTitle} setBody={setNewBody} setCategory={setNewCategory} setPlatform={setNewPlatform} setScheduledAt={setNewScheduledAt} onClose={resetComposer} onSave={addItem} saving={createContent.isPending} />}
+      {showComposer && <Composer type={composerType} setType={setComposerType} title={newTitle} body={newBody} category={newCategory} platform={newPlatform} scheduledAt={newScheduledAt} profiles={profilesQuery.data || []} profileId={newProfileId} setTitle={setNewTitle} setBody={setNewBody} setCategory={setNewCategory} setPlatform={setNewPlatform} setScheduledAt={setNewScheduledAt} setProfileId={setNewProfileId} onClose={resetComposer} onSave={addItem} saving={createContent.isPending} />}
       {shareTarget && <ShareDialog target={shareTarget} shareUrl={shareUrl} shareId={shareId} onClose={() => { setShareTarget(null); setShareUrl(""); setShareId(null); }} onCreate={createPrivateShare} onDeactivate={() => { if (shareId) { deactivateShare.mutate({ id: shareId }, { onSuccess: () => toast.success("Enlace desactivado.") }); } setShareTarget(null); setShareUrl(""); setShareId(null); }} creating={createShare.isPending} />}
     </div>
   );
@@ -514,8 +541,8 @@ function QuickAction({ icon, label, tone, onClick }: { icon: React.ReactNode; la
   return <button onClick={onClick} className="flex items-center gap-2.5 rounded-xl border border-[#efeee8] bg-[#fcfcf9] px-3 py-3 text-left text-[11px] font-semibold text-[#627075] transition hover:-translate-y-0.5 hover:border-[#dddcd2] hover:bg-white"><span className={`grid h-8 w-8 place-items-center rounded-lg ${tones[tone]}`}>{icon}</span><span>{label}</span></button>;
 }
 
-function Composer({ type, setType, title, body, category, platform, scheduledAt, setTitle, setBody, setCategory, setPlatform, setScheduledAt, onClose, onSave, saving }: { type: ContentType; setType: (value: ContentType) => void; title: string; body: string; category: string; platform: string; scheduledAt: string; setTitle: (value: string) => void; setBody: (value: string) => void; setCategory: (value: string) => void; setPlatform: (value: string) => void; setScheduledAt: (value: string) => void; onClose: () => void; onSave: () => void; saving: boolean }) {
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[540px] rounded-t-[26px] border border-white/80 bg-[#fbfbf7] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Nuevo contenido</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#29373d]">Añade algo a tu espacio</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#f0f0ea] hover:text-[#3e4b50]"><X size={18} /></button></div><div className="mt-6 grid grid-cols-4 gap-2">{(["note", "link", "image", "publication"] as ContentType[]).map(option => <button key={option} onClick={() => setType(option)} className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-[10px] font-semibold transition ${type === option ? "border-[#f2b2a1] bg-[#fff0eb] text-[#d9674e]" : "border-[#e8e7df] text-[#8d9692] hover:bg-white"}`}><TypeIcon type={option} size={16} />{option === "note" ? "Nota" : option === "link" ? "Enlace" : option === "image" ? "Foto" : "Publicación"}</button>)}</div><div className="mt-5 space-y-3"><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="Título del contenido" className="h-12 w-full rounded-xl border border-[#e4e3da] bg-white px-4 text-[13px] font-medium text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><textarea value={body} onChange={event => setBody(event.target.value)} placeholder={type === "link" ? "Pega aquí el enlace o escribe una nota sobre él..." : "Escribe una idea, texto o contexto para volver a encontrarlo..."} className="min-h-[112px] w-full resize-none rounded-xl border border-[#e4e3da] bg-white px-4 py-3 text-[13px] leading-5 text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><div className="grid gap-3 sm:grid-cols-2"><div className="relative"><Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={category} onChange={event => setCategory(event.target.value)} placeholder="Categoría" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div><div className="relative"><Send className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={platform} onChange={event => setPlatform(event.target.value)} placeholder="Plataforma (opcional)" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div></div></div><div className="mt-4 flex items-center gap-3 rounded-xl border border-[#e4e3da] bg-white px-3 py-2.5"><CalendarDays size={15} className="text-[#ef795d]" /><div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Programar publicación</p><input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} className="mt-1 w-full bg-transparent text-[12px] text-[#344149] outline-none" /></div><button type="button" onClick={() => setScheduledAt("")} className="text-[11px] text-[#9aa29e] hover:text-[#ef795d]">Quitar</button></div><div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#7c8785] hover:bg-[#f0f0ea]">Cancelar</button><button onClick={onSave} disabled={saving} className="flex items-center gap-2 rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#3e4e55] disabled:cursor-wait disabled:opacity-70">{saving ? "Guardando..." : "Guardar en biblioteca"}<ArrowUpRight size={14} /></button></div></div></div>;
+function Composer({ type, setType, title, body, category, platform, scheduledAt, profiles, profileId, setTitle, setBody, setCategory, setPlatform, setScheduledAt, setProfileId, onClose, onSave, saving }: { type: ContentType; setType: (value: ContentType) => void; title: string; body: string; category: string; platform: string; scheduledAt: string; profiles: PublicationProfile[]; profileId?: number; setTitle: (value: string) => void; setBody: (value: string) => void; setCategory: (value: string) => void; setPlatform: (value: string) => void; setScheduledAt: (value: string) => void; setProfileId: (value: number | undefined) => void; onClose: () => void; onSave: () => void; saving: boolean }) {
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[540px] rounded-t-[26px] border border-white/80 bg-[#fbfbf7] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Nuevo contenido</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#29373d]">Añade algo a tu espacio</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#f0f0ea] hover:text-[#3e4b50]"><X size={18} /></button></div><div className="mt-6 grid grid-cols-4 gap-2">{(["note", "link", "image", "publication"] as ContentType[]).map(option => <button key={option} onClick={() => setType(option)} className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-[10px] font-semibold transition ${type === option ? "border-[#f2b2a1] bg-[#fff0eb] text-[#d9674e]" : "border-[#e8e7df] text-[#8d9692] hover:bg-white"}`}><TypeIcon type={option} size={16} />{option === "note" ? "Nota" : option === "link" ? "Enlace" : option === "image" ? "Foto" : "Publicación"}</button>)}</div><div className="mt-5 space-y-3"><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="Título del contenido" className="h-12 w-full rounded-xl border border-[#e4e3da] bg-white px-4 text-[13px] font-medium text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><textarea value={body} onChange={event => setBody(event.target.value)} placeholder={type === "link" ? "Pega aquí el enlace o escribe una nota sobre él..." : "Escribe una idea, texto o contexto para volver a encontrarlo..."} className="min-h-[112px] w-full resize-none rounded-xl border border-[#e4e3da] bg-white px-4 py-3 text-[13px] leading-5 text-[#344149] outline-none placeholder:text-[#aeb4af] focus:border-[#efb0a0]" /><div className="grid gap-3 sm:grid-cols-2"><div className="relative"><Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={category} onChange={event => setCategory(event.target.value)} placeholder="Categoría" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div><div className="relative"><Send className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a5ada8]" size={14} /><input value={platform} onChange={event => setPlatform(event.target.value)} placeholder="Plataforma (opcional)" className="h-10 w-full rounded-xl border border-[#e4e3da] bg-white pl-9 pr-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></div></div></div><div className="mt-4 flex items-center gap-3 rounded-xl border border-[#e4e3da] bg-white px-3 py-2.5"><Settings2 size={15} className="text-[#7864cd]" /><div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Perfil de publicación</p><select value={profileId ?? ""} onChange={event => setProfileId(event.target.value ? Number(event.target.value) : undefined)} className="mt-1 w-full bg-transparent text-[12px] text-[#344149] outline-none"><option value="">Sin perfil</option>{profiles.filter(profile => profile.contentType === "all" || profile.contentType === type).map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.platform}</option>)}</select></div></div><div className="mt-4 flex items-center gap-3 rounded-xl border border-[#e4e3da] bg-white px-3 py-2.5"><CalendarDays size={15} className="text-[#ef795d]" /><div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Programar publicación</p><input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} className="mt-1 w-full bg-transparent text-[12px] text-[#344149] outline-none" /></div><button type="button" onClick={() => setScheduledAt("")} className="text-[11px] text-[#9aa29e] hover:text-[#ef795d]">Quitar</button></div><div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#7c8785] hover:bg-[#f0f0ea]">Cancelar</button><button onClick={onSave} disabled={saving} className="flex items-center gap-2 rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#3e4e55] disabled:cursor-wait disabled:opacity-70">{saving ? "Guardando..." : "Guardar en biblioteca"}<ArrowUpRight size={14} /></button></div></div></div>;
 }
 
 
@@ -562,11 +589,59 @@ function ShareAdminPanel({ links, onDeactivate }: { links: Array<{ id: number; t
 }
 
 
-function PublishPanel({ items, onShare }: { items: ContentItem[]; onShare: (item: ContentItem) => void }) {
+function PublishPanel({ items, instagramReady, onShare, onInstagramPublish }: { items: ContentItem[]; instagramReady: boolean; onShare: (item: ContentItem) => void; onInstagramPublish: (item: ContentItem) => void }) {
   const providers = [
     { name: "Instagram", detail: "Conector pendiente de habilitar", tone: "bg-[#fff0eb] text-[#d9674e]", action: "Preparar contenido" },
     { name: "WhatsApp", detail: "Usa el menú de compartir del dispositivo", tone: "bg-[#e8f4ed] text-[#4a9874]", action: "Compartir" },
     { name: "Facebook", detail: "Puedes copiar y pegar tu publicación", tone: "bg-[#eef2ff] text-[#5f72c7]", action: "Copiar y compartir" },
   ];
-  return <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-5 sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Centro de publicación</p><h2 className="mt-2 font-serif text-[27px] tracking-[-.03em]">Comparte sin salir de tu biblioteca</h2><p className="mt-2 max-w-xl text-[12px] leading-5 text-[#84908d]">Elige una publicación lista y usa el menú de tu dispositivo para enviarla a WhatsApp, Instagram u otra aplicación. La publicación original permanece intacta.</p></div><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#fff0eb] text-[#ef795d]"><Send size={18} /></span></div><div className="mt-6 grid gap-3 md:grid-cols-3">{providers.map(provider => <div key={provider.name} className="rounded-2xl border border-[#eceae1] bg-[#fcfcf9] p-4"><div className={`grid h-9 w-9 place-items-center rounded-xl ${provider.tone}`}><Send size={16} /></div><h3 className="mt-4 text-[13px] font-semibold text-[#344149]">{provider.name}</h3><p className="mt-1 min-h-[32px] text-[11px] leading-4 text-[#929b97]">{provider.detail}</p><button onClick={() => { if (provider.name === "Instagram") toast.info("Para publicación directa hay que habilitar el conector de Instagram."); else if (items[0]) onShare(items[0]); else toast.info("Primero crea una publicación lista."); }} className="mt-4 rounded-lg border border-[#e4e3da] px-3 py-2 text-[10px] font-bold text-[#69767a] hover:bg-white">{provider.action}</button></div>)}</div>{items.length > 0 ? <div className="mt-7 border-t border-[#eceae3] pt-5"><div className="flex items-center justify-between"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9aa29e]">Listas para compartir</p><span className="text-[10px] text-[#a7ada9]">{items.length} disponibles</span></div><div className="mt-3 flex gap-2 overflow-x-auto pb-1">{items.slice(0, 6).map(item => <button key={item.id} onClick={() => onShare(item)} className="flex min-w-[190px] items-center gap-3 rounded-xl border border-[#e8e7df] bg-white px-3 py-2.5 text-left hover:border-[#efb0a0]"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#f0edff] text-[#7864cd]"><TypeIcon type={item.type} size={14} /></span><span className="min-w-0"><span className="block truncate text-[11px] font-semibold text-[#546269]">{item.title}</span><span className="mt-0.5 block text-[10px] text-[#a1aaa5]">Abrir compartir</span></span></button>)}</div></div> : <div className="mt-7 rounded-xl bg-[#f8f7f2] px-4 py-5 text-center text-xs text-[#929b97]">Aún no hay publicaciones listas. Cambia el estado de una idea o crea una publicación nueva.</div>}</div>;
+  return <div className="rounded-[22px] border border-[#ebe9e0] bg-white p-5 sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Centro de publicación</p><h2 className="mt-2 font-serif text-[27px] tracking-[-.03em]">Comparte sin salir de tu biblioteca</h2><p className="mt-2 max-w-xl text-[12px] leading-5 text-[#84908d]">Elige una publicación lista y usa el menú de tu dispositivo para enviarla a WhatsApp, Instagram u otra aplicación. La publicación original permanece intacta.</p></div><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#fff0eb] text-[#ef795d]"><Send size={18} /></span></div><div className="mt-6 grid gap-3 md:grid-cols-3">{providers.map(provider => <div key={provider.name} className="rounded-2xl border border-[#eceae1] bg-[#fcfcf9] p-4"><div className={`grid h-9 w-9 place-items-center rounded-xl ${provider.tone}`}><Send size={16} /></div><h3 className="mt-4 text-[13px] font-semibold text-[#344149]">{provider.name}</h3><p className="mt-1 min-h-[32px] text-[11px] leading-4 text-[#929b97]">{provider.name === "Instagram" && instagramReady ? "Conectado y listo para publicar" : provider.detail}</p><button onClick={() => { if (provider.name === "Instagram") { const candidate = items.find(item => typeof item.id === "number" && (item.type === "image" || item.type === "video")); if (instagramReady && candidate) onInstagramPublish(candidate); else if (!instagramReady) toast.info("Instagram necesita completar la conexión del servidor."); else toast.info("Guarda primero una foto o video real para publicarlo."); } else if (items[0]) onShare(items[0]); else toast.info("Primero crea una publicación lista."); }} className="mt-4 rounded-lg border border-[#e4e3da] px-3 py-2 text-[10px] font-bold text-[#69767a] hover:bg-white">{provider.action}</button></div>)}</div>{items.length > 0 ? <div className="mt-7 border-t border-[#eceae3] pt-5"><div className="flex items-center justify-between"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9aa29e]">Listas para compartir</p><span className="text-[10px] text-[#a7ada9]">{items.length} disponibles</span></div><div className="mt-3 flex gap-2 overflow-x-auto pb-1">{items.slice(0, 6).map(item => <button key={item.id} onClick={() => onShare(item)} className="flex min-w-[190px] items-center gap-3 rounded-xl border border-[#e8e7df] bg-white px-3 py-2.5 text-left hover:border-[#efb0a0]"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#f0edff] text-[#7864cd]"><TypeIcon type={item.type} size={14} /></span><span className="min-w-0"><span className="block truncate text-[11px] font-semibold text-[#546269]">{item.title}</span><span className="mt-0.5 block text-[10px] text-[#a1aaa5]">Abrir compartir</span></span></button>)}</div></div> : <div className="mt-7 rounded-xl bg-[#f8f7f2] px-4 py-5 text-center text-xs text-[#929b97]">Aún no hay publicaciones listas. Cambia el estado de una idea o crea una publicación nueva.</div>}</div>;
+}
+
+
+async function compressVideo(file: File, quality: Exclude<VideoQuality, "original">) {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.src = URL.createObjectURL(file);
+  await new Promise<void>((resolve, reject) => { video.onloadedmetadata = () => resolve(); video.onerror = () => reject(new Error("No se pudo leer el video")); });
+  const stream = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
+  const mimeTypes = ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].filter(type => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type));
+  if (!stream || !mimeTypes.length) {
+    URL.revokeObjectURL(video.src);
+    return { dataUrl: await readAsDataUrl(file), contentType: file.type, fileName: file.name, compressed: false };
+  }
+  const bitrate = quality === "1080p" ? 5_000_000 : quality === "720p" ? 2_800_000 : 1_400_000;
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(stream, { mimeType: mimeTypes[0], videoBitsPerSecond: bitrate });
+  const finished = new Promise<Blob>((resolve, reject) => { recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); }; recorder.onerror = () => reject(new Error("No se pudo comprimir el video")); recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType })); });
+  video.onended = () => recorder.stop();
+  recorder.start(250);
+  await video.play();
+  const compressed = await finished;
+  video.pause();
+  URL.revokeObjectURL(video.src);
+  const extension = compressed.type.includes("mp4") ? "mp4" : "webm";
+  return { dataUrl: await readAsDataUrl(compressed), contentType: compressed.type, fileName: file.name.replace(/\.[^.]+$/, "") + `-${quality}.${extension}`, compressed: compressed.size < file.size };
+}
+
+
+function ProfilePanel({ profiles, onCreate, onRemove }: { profiles: PublicationProfile[]; onCreate: (profile: { name: string; contentType: PublicationProfile["contentType"]; platform: string; tone?: string; captionTemplate?: string; hashtags?: string; videoQuality: VideoQuality; isDefault: boolean }) => void; onRemove: (id: number) => void }) {
+  const [name, setName] = useState("");
+  const [contentType, setContentType] = useState<PublicationProfile["contentType"]>("all");
+  const [platform, setPlatform] = useState("Instagram");
+  const [tone, setTone] = useState("Cercano y claro");
+  const [captionTemplate, setCaptionTemplate] = useState("{texto}");
+  const [hashtags, setHashtags] = useState("");
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>("1080p");
+  const [isDefault, setIsDefault] = useState(false);
+
+  const submit = () => {
+    if (!name.trim()) { toast.error("Escribe un nombre para el perfil."); return; }
+    onCreate({ name: name.trim(), contentType, platform, tone, captionTemplate, hashtags, videoQuality, isDefault });
+    setName("");
+    setHashtags("");
+  };
+
+  return <div className="grid gap-5 xl:grid-cols-[1.15fr_.85fr]"><div className="rounded-[22px] border border-[#ebe9e0] bg-white p-5 sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#ef795d]">Nuevo perfil</p><h2 className="mt-2 font-serif text-[27px] tracking-[-.03em]">Publica con una fórmula consistente</h2><p className="mt-2 max-w-xl text-[12px] leading-5 text-[#84908d]">Guarda reglas para que cada nota, imagen o video salga con el tono, hashtags y calidad adecuados.</p></div><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#f0edff] text-[#7864cd]"><Settings2 size={18} /></span></div><div className="mt-6 grid gap-3 sm:grid-cols-2"><label className="sm:col-span-2"><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Nombre</span><input value={name} onChange={event => setName(event.target.value)} placeholder="Ej. Reels educativos" className="h-11 w-full rounded-xl border border-[#e4e3da] bg-white px-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></label><label><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Tipo de contenido</span><select value={contentType} onChange={event => setContentType(event.target.value as PublicationProfile["contentType"])} className="h-11 w-full rounded-xl border border-[#e4e3da] bg-white px-3 text-[12px] text-[#344149] outline-none"><option value="all">Todos</option><option value="image">Fotos</option><option value="video">Videos</option><option value="publication">Publicaciones</option></select></label><label><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Plataforma</span><select value={platform} onChange={event => setPlatform(event.target.value)} className="h-11 w-full rounded-xl border border-[#e4e3da] bg-white px-3 text-[12px] text-[#344149] outline-none"><option>Instagram</option><option>WhatsApp</option><option>Facebook</option><option>Otra</option></select></label><label><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Tono</span><input value={tone} onChange={event => setTone(event.target.value)} className="h-11 w-full rounded-xl border border-[#e4e3da] bg-white px-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></label><label><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Calidad de video</span><select value={videoQuality} onChange={event => setVideoQuality(event.target.value as VideoQuality)} className="h-11 w-full rounded-xl border border-[#e4e3da] bg-white px-3 text-[12px] text-[#344149] outline-none"><option value="original">Original</option><option value="1080p">Alta · 1080p</option><option value="720p">Equilibrada · 720p</option><option value="480p">Ligera · 480p</option></select></label><label className="sm:col-span-2"><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Plantilla de texto</span><textarea value={captionTemplate} onChange={event => setCaptionTemplate(event.target.value)} placeholder="{texto}\n\n{hashtags}" className="min-h-[78px] w-full resize-none rounded-xl border border-[#e4e3da] bg-white px-3 py-2.5 text-[12px] leading-5 text-[#344149] outline-none focus:border-[#efb0a0]" /></label><label className="sm:col-span-2"><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[.12em] text-[#9aa29e]">Hashtags base</span><input value={hashtags} onChange={event => setHashtags(event.target.value)} placeholder="#marca, #educación, #tips" className="h-11 w-full rounded-xl border border-[#e4e3da] bg-white px-3 text-[12px] text-[#344149] outline-none focus:border-[#efb0a0]" /></label></div><div className="mt-5 flex flex-col gap-3 border-t border-[#eceae3] pt-5 sm:flex-row sm:items-center sm:justify-between"><label className="flex items-center gap-2 text-[11px] text-[#7d8985]"><input type="checkbox" checked={isDefault} onChange={event => setIsDefault(event.target.checked)} className="accent-[#ef795d]" /> Usar como perfil predeterminado</label><button onClick={submit} className="rounded-xl bg-[#29373d] px-5 py-2.5 text-[12px] font-semibold text-white">Guardar perfil</button></div></div><div className="rounded-[22px] bg-[#fff1ec] p-5 sm:p-7"><div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#c67564]">Tus perfiles</p><h2 className="mt-2 font-serif text-[23px] tracking-[-.03em] text-[#533b37]">Listos para reutilizar</h2></div><span className="font-serif text-3xl text-[#db674f]">{profiles.length}</span></div>{profiles.length ? <div className="mt-6 space-y-2">{profiles.map(profile => <div key={profile.id} className="rounded-2xl border border-[#f0d8d0] bg-white/70 p-4"><div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h3 className="text-[13px] font-semibold text-[#533b37]">{profile.name}</h3>{profile.isDefault && <span className="rounded-full bg-[#e8f4ed] px-2 py-1 text-[9px] font-bold text-[#4a9874]">Predeterminado</span>}</div><p className="mt-1 text-[11px] text-[#9a7971]">{profile.platform} · {profile.contentType === "all" ? "Todos los formatos" : profile.contentType} · {profile.videoQuality}</p></div><button onClick={() => onRemove(profile.id)} className="rounded-lg p-1.5 text-[#c57b6d] hover:bg-[#fff0eb]"><Trash2 size={14} /></button></div>{profile.hashtags && <p className="mt-3 truncate text-[10px] text-[#a2867f]">{profile.hashtags}</p>}</div>)}</div> : <div className="mt-7 rounded-2xl border border-dashed border-[#e8c8bf] px-4 py-8 text-center text-[11px] leading-5 text-[#a2867f]">Crea tu primer perfil para guardar reglas de publicación.</div>}</div></div>;
 }

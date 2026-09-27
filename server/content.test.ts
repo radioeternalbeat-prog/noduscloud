@@ -30,4 +30,14 @@ describe("content procedures", () => {
     const caller = appRouter.createCaller(createAnonymousContext());
     await expect(caller.share.public({ token: "token-no-existe-123" })).resolves.toBeNull();
   });
+
+  it("requires authentication to manage publication profiles", async () => {
+    const caller = appRouter.createCaller(createAnonymousContext());
+    await expect(caller.profiles.list()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("requires authentication to publish to Instagram", async () => {
+    const caller = appRouter.createCaller(createAnonymousContext());
+    await expect(caller.instagram.publish({ contentId: 1, mediaType: "IMAGE" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
 });
