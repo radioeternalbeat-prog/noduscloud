@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { contentItems, InsertContentItem, InsertPublicationProfile, InsertShareLink, InsertUser, publicationProfiles, shareLinks, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -166,6 +166,17 @@ export async function deletePublicationProfile(id: number, userId: number) {
 export async function getContentItem(id: number, userId: number) {
   const db = await getDb();
   if (!db) return undefined;
+  const rows = await db.select().from(contentItems).where(and(eq(contentItems.id, id), eq(contentItems.userId, userId))).limit(1);
+  return rows[0];
+}
+
+
+export async function recordContentOpen(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(contentItems)
+    .set({ openCount: sql`${contentItems.openCount} + 1` })
+    .where(and(eq(contentItems.id, id), eq(contentItems.userId, userId)));
   const rows = await db.select().from(contentItems).where(and(eq(contentItems.id, id), eq(contentItems.userId, userId))).limit(1);
   return rows[0];
 }

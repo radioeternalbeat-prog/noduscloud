@@ -27,6 +27,7 @@ export const contentItems = mysqlTable("content_items", {
   platform: varchar("platform", { length: 80 }),
   profileId: int("profileId"),
   isFavorite: boolean("isFavorite").notNull().default(false),
+  openCount: int("openCount").notNull().default(0),
   scheduledAt: timestamp("scheduledAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

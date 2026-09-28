@@ -1,0 +1,1 @@
+ALTER TABLE `content_items` ADD `openCount` int DEFAULT 0 NOT NULL;

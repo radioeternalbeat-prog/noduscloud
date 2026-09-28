@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { createContentItem, createPublicationProfile, createShareLink, deactivateShareLink, deleteContentItem, deletePublicationProfile, getContentItem, getSharedContent, getShareLinkByToken, listContentItems, listPublicationProfiles, listShareLinks, updateContentItem, updatePublicationProfile } from "./db";
+import { createContentItem, createPublicationProfile, createShareLink, deactivateShareLink, deleteContentItem, deletePublicationProfile, getContentItem, getSharedContent, recordContentOpen, getShareLinkByToken, listContentItems, listPublicationProfiles, listShareLinks, updateContentItem, updatePublicationProfile } from "./db";
 import { storagePut } from "./storage";
 import { instagramConfigStatus, publishToInstagram } from "./instagram";
 
@@ -54,6 +54,7 @@ export const appRouter = router({
       return updateContentItem(input.id, ctx.user.id, { ...rest, ...(scheduledAt !== undefined ? { scheduledAt: toDate(scheduledAt) } : {}) });
     }),
     remove: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ ctx, input }) => deleteContentItem(input.id, ctx.user.id)),
+    recordOpen: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ ctx, input }) => recordContentOpen(input.id, ctx.user.id)),
   }),
   profiles: router({
     list: protectedProcedure.query(({ ctx }) => listPublicationProfiles(ctx.user.id)),

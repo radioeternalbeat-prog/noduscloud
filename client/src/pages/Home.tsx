@@ -6,6 +6,7 @@ import { normalizeLinkUrl } from "@/lib/link-utils";
 import {
   Archive,
   ArrowUpRight,
+  ArrowDownUp,
   Bell,
   BookOpen,
   CalendarDays,
@@ -60,6 +61,7 @@ type ContentItem = {
   platform?: string | null;
   profileId?: number | null;
   isFavorite: boolean;
+  openCount?: number;
   createdAt?: Date | string;
   scheduledAt?: Date | string | null;
 };
@@ -218,6 +220,8 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<"all" | ContentType>("all");
   const [view, setView] = useState<"grid" | "list">("grid");
+  const [linksView, setLinksView] = useState<"cards" | "list">("cards");
+  const [linksSort, setLinksSort] = useState<"recent" | "favorites" | "popular">("recent");
   const [showComposer, setShowComposer] = useState(false);
   const [composerType, setComposerType] = useState<ContentType>("note");
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -239,6 +243,7 @@ export default function Home() {
   });
   const createContent = trpc.content.create.useMutation();
   const updateContent = trpc.content.update.useMutation();
+  const recordOpen = trpc.content.recordOpen.useMutation();
   const uploadFile = trpc.content.upload.useMutation();
   const createShare = trpc.share.create.useMutation();
   const deactivateShare = trpc.share.deactivate.useMutation();
@@ -538,7 +543,7 @@ export default function Home() {
           </>}
 
           {activeSection === "Calendario" && <CalendarPanel items={items} onSchedule={scheduleItem} onStatus={changeStatus} />}
-          {activeSection === "Enlaces guardados" && <SavedLinksPanel items={items.filter(item => item.type === "link")} query={query} onQuery={setQuery} onOpen={item => { const target = item.url || item.body; if (target) window.open(target, "_blank", "noopener,noreferrer"); else toast.info("Este enlace todavía no tiene una URL válida."); }} onFavorite={toggleFavorite} onCopy={copyItem} onNew={() => openComposer("link")} />}
+          {activeSection === "Enlaces guardados" && <SavedLinksPanel items={items.filter(item => item.type === "link")} query={query} onQuery={setQuery} viewMode={linksView} onViewMode={setLinksView} sort={linksSort} onSort={setLinksSort} onOpen={item => { const target = item.url || item.body; if (target) { if (isAuthenticated && typeof item.id === "number") { recordOpen.mutate({ id: item.id }, { onSuccess: updated => setItems(current => current.map(entry => entry.id === item.id ? { ...entry, openCount: updated?.openCount ?? (entry.openCount ?? 0) + 1 } : entry)) }); } else { setItems(current => current.map(entry => entry.id === item.id ? { ...entry, openCount: (entry.openCount ?? 0) + 1 } : entry)); } window.open(target, "_blank", "noopener,noreferrer"); } else toast.info("Este enlace todavía no tiene una URL válida."); }} onFavorite={toggleFavorite} onCopy={copyItem} onNew={() => openComposer("link")} /> }
           {activeSection === "Perfiles de publicación" && <ProfilePanel profiles={profilesQuery.data || []} onCreate={profile => createProfile.mutate(profile, { onSuccess: () => { toast.success("Perfil creado."); profilesQuery.refetch(); }, onError: error => toast.error(error.message || "No se pudo crear el perfil.") })} onRemove={id => removeProfile.mutate({ id }, { onSuccess: () => { toast.success("Perfil eliminado."); profilesQuery.refetch(); } })} />}
           {activeSection === "Publicaciones" && <PublishPanel items={items.filter(item => item.type === "publication" || item.status === "ready")} instagramReady={Boolean(instagramStatus.data?.configured)} onShare={shareExternally} onInstagramPublish={item => { if (typeof item.id !== "number" || (item.type !== "image" && item.type !== "video")) { toast.info("Guarda primero una foto o video real para publicarlo."); return; } publishInstagram.mutate({ contentId: item.id, mediaType: item.type === "video" ? "REELS" : "IMAGE" }, { onSuccess: () => { setItems(current => current.map(entry => entry.id === item.id ? { ...entry, status: "published", platform: "Instagram" } : entry)); toast.success("Publicado en Instagram."); }, onError: error => toast.error(error.message || "No se pudo publicar en Instagram.") }); }} />}
 
@@ -618,28 +623,48 @@ function ShareDialog({ target, shareUrl, shareId, onClose, onCreate, onDeactivat
 }
 
 
-function SavedLinksPanel({ items, query, onQuery, onOpen, onFavorite, onCopy, onNew }: { items: ContentItem[]; query: string; onQuery: (value: string) => void; onOpen: (item: ContentItem) => void; onFavorite: (item: ContentItem) => void; onCopy: (item: ContentItem) => void; onNew: () => void }) {
+function FaviconBadge({ url }: { url?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const host = useMemo(() => {
+    try { return url ? new URL(url).hostname.replace(/^www\./, "") : ""; } catch { return ""; }
+  }, [url]);
+  const favicon = host ? `https://icons.duckduckgo.com/ip3/${host}.ico` : "";
+  return <span className="flex h-full w-9 shrink-0 items-center justify-center rounded-[11px] bg-[#222222] text-[#E1FF00]" title={host || "Enlace guardado"}>{favicon && !failed ? <img src={favicon} alt="" className="h-5 w-5 rounded-md object-contain" onError={() => setFailed(true)} referrerPolicy="no-referrer" /> : <Link2 size={16} />}</span>;
+}
+
+function SavedLinkCard({ item, viewMode, domain, onOpen, onFavorite, onCopy }: { item: ContentItem; viewMode: "cards" | "list"; domain: (url?: string | null) => string; onOpen: (item: ContentItem) => void; onFavorite: (item: ContentItem) => void; onCopy: (item: ContentItem) => void }) {
+  const compact = viewMode === "list";
+  return <article className={compact ? "group flex items-center gap-3 rounded-[16px] border border-[#2A2A2A] bg-[#1A1A1A] px-3 py-2.5 transition hover:border-[#3A3A3A]" : "group flex min-h-[142px] items-stretch gap-3 rounded-[18px] border border-[#2A2A2A] bg-[#1A1A1A] p-3 transition hover:-translate-y-0.5 hover:border-[#3A3A3A] hover:shadow-[0_12px_28px_rgba(0,0,0,.2)]"}>
+    <FaviconBadge url={item.url || item.body} />
+    <div className="min-w-0 flex-1">
+      <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-semibold text-[#F5F5F5]">{item.title}</h3><p className="mt-1 truncate text-[11px] text-[#FF8000]">{domain(item.url || item.body)}</p></div><button onClick={() => onFavorite(item)} aria-label={item.isFavorite ? "Quitar de favoritos" : "Añadir a favoritos"} className={`rounded-lg p-1.5 transition ${item.isFavorite ? "text-[#FF8000]" : "text-[#777777] hover:text-[#FF8000]"}`}><Heart size={15} fill={item.isFavorite ? "currentColor" : "none"} /></button></div>
+      {!compact && <p className="mt-2 line-clamp-2 min-h-[28px] text-[11px] leading-4 text-[#8B8B8B]">{item.description || "Sin descripción. Añade contexto para encontrarlo más rápido."}</p>}
+      <div className={compact ? "mt-1 flex items-center gap-2" : "mt-3 flex items-center justify-between gap-2 border-t border-[#2A2A2A] pt-3"}><span className="min-w-0 truncate text-[10px] text-[#777777]">{item.category || "Sin organizar"}{item.tags ? ` · ${item.tags}` : ""}</span><span className="shrink-0 text-[10px] text-[#777777]">{item.openCount ?? 0} aperturas</span><div className="ml-auto flex shrink-0 gap-1.5"><button onClick={() => onCopy(item)} className="rounded-lg border border-[#2A2A2A] p-1.5 text-[#8B8B8B] hover:bg-[#222222] hover:text-[#F5F5F5]" aria-label="Copiar enlace"><Copy size={13} /></button><button onClick={() => onOpen(item)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#FF8000] px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-[#FFA333]"><ExternalLink size={12} /> Abrir</button></div></div>
+    </div>
+  </article>;
+}
+
+function SavedLinksPanel({ items, query, onQuery, viewMode, onViewMode, sort, onSort, onOpen, onFavorite, onCopy, onNew }: { items: ContentItem[]; query: string; onQuery: (value: string) => void; viewMode: "cards" | "list"; onViewMode: (value: "cards" | "list") => void; sort: "recent" | "favorites" | "popular"; onSort: (value: "recent" | "favorites" | "popular") => void; onOpen: (item: ContentItem) => void; onFavorite: (item: ContentItem) => void; onCopy: (item: ContentItem) => void; onNew: () => void }) {
   const [category, setCategory] = useState("Todos");
   const categories = ["Todos", ...Array.from(new Set(items.map(item => item.category || "Sin organizar"))).sort()];
   const normalized = query.trim().toLowerCase();
+  const domain = (url?: string | null) => { try { return url ? new URL(url).hostname.replace(/^www\./, "") : "Sin URL"; } catch { return "Enlace"; } };
   const visible = items.filter(item => {
     const matchesCategory = category === "Todos" || (item.category || "Sin organizar") === category;
     const searchable = [item.title, item.url, item.description, item.tags, item.category].filter(Boolean).join(" ").toLowerCase();
     return matchesCategory && (!normalized || searchable.includes(normalized));
+  }).sort((a, b) => {
+    if (sort === "favorites" && a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
+    if (sort === "popular") return (b.openCount ?? 0) - (a.openCount ?? 0) || new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
   });
-  const domain = (url?: string | null) => {
-    try { return url ? new URL(url).hostname.replace(/^www\./, "") : "Sin URL"; } catch { return "Enlace"; }
-  };
 
   return <div className="space-y-5">
     <div className="rounded-[22px] border border-[#2A2A2A] bg-[#1A1A1A] p-5 sm:p-7">
-      <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
-        <div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#FF8000]">Acceso rápido</p><h2 className="mt-2 font-serif text-[29px] tracking-[-.04em]">Tus enlaces, a un toque</h2><p className="mt-2 max-w-xl text-[12px] leading-5 text-[#8B8B8B]">Guarda referencias, herramientas y páginas importantes. Búscalas, ábrelas o compártelas sin volver a revisar conversaciones.</p></div>
-        <button onClick={onNew} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#FF8000] px-4 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,128,0,.18)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Guardar enlace</button>
-      </div>
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777777]" size={15} /><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Buscar por nombre, sitio o etiqueta..." aria-label="Buscar enlaces guardados" className="h-11 w-full rounded-xl border border-[#2A2A2A] bg-[#111111] pl-10 pr-3 text-[12px] text-[#E5E5E5] outline-none placeholder:text-[#6B6B6B] focus:border-[#FF8000]" /></label><div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-[#2A2A2A] bg-[#111111] p-1">{categories.map(option => <button key={option} onClick={() => setCategory(option)} className={`shrink-0 rounded-lg px-3 py-2 text-[10px] font-semibold transition ${category === option ? "bg-[#222222] text-[#FF8000]" : "text-[#8B8B8B] hover:text-[#F5F5F5]"}`}>{option}</button>)}</div></div>
+      <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#FF8000]">Acceso rápido</p><h2 className="mt-2 font-serif text-[29px] tracking-[-.04em]">Tus enlaces, a un toque</h2><p className="mt-2 max-w-xl text-[12px] leading-5 text-[#8B8B8B]">Guarda referencias, herramientas y páginas importantes. Búscalas, ábrelas o compártelas sin volver a revisar conversaciones.</p></div><button onClick={onNew} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#FF8000] px-4 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,128,0,.18)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Guardar enlace</button></div>
+      <div className="mt-6 flex flex-col gap-3"><div className="flex flex-col gap-3 sm:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777777]" size={15} /><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Buscar por nombre, sitio o etiqueta..." aria-label="Buscar enlaces guardados" className="h-11 w-full rounded-xl border border-[#2A2A2A] bg-[#111111] pl-10 pr-3 text-[12px] text-[#E5E5E5] outline-none placeholder:text-[#6B6B6B] focus:border-[#FF8000]" /></label><div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-[#2A2A2A] bg-[#111111] p-1">{categories.map(option => <button key={option} onClick={() => setCategory(option)} className={`shrink-0 rounded-lg px-3 py-2 text-[10px] font-semibold transition ${category === option ? "bg-[#222222] text-[#FF8000]" : "text-[#8B8B8B] hover:text-[#F5F5F5]"}`}>{option}</button>)}</div></div><div className="flex flex-wrap items-center justify-between gap-2"><label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[.12em] text-[#777777]"><ArrowDownUp size={14} className="text-[#FF8000]" /><span>Ordenar</span><select value={sort} onChange={event => onSort(event.target.value as typeof sort)} className="rounded-lg border border-[#2A2A2A] bg-[#111111] px-2.5 py-2 text-[11px] normal-case tracking-normal text-[#E5E5E5] outline-none"><option value="recent">Más recientes</option><option value="favorites">Favoritos primero</option><option value="popular">Más abiertos</option></select></label><div className="flex items-center gap-1 rounded-xl border border-[#2A2A2A] bg-[#111111] p-1" aria-label="Vista de enlaces"><button onClick={() => onViewMode("cards")} aria-label="Vista de tarjetas" className={`rounded-lg p-2 transition ${viewMode === "cards" ? "bg-[#222222] text-[#FF8000]" : "text-[#777777] hover:text-[#F5F5F5]"}`}><LayoutGrid size={15} /></button><button onClick={() => onViewMode("list")} aria-label="Vista de lista compacta" className={`rounded-lg p-2 transition ${viewMode === "list" ? "bg-[#222222] text-[#FF8000]" : "text-[#777777] hover:text-[#F5F5F5]"}`}><List size={15} /></button></div></div></div>
     </div>
-    {visible.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#333333] bg-[#1A1A1A]/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#222222] text-[#E1FF00]"><Link2 size={20} /></span><h3 className="mt-4 font-serif text-[22px] text-[#F5F5F5]">Todavía no hay enlaces aquí</h3><p className="mx-auto mt-2 max-w-sm text-[12px] leading-5 text-[#8B8B8B]">Guarda tu primer enlace y tendrás un acceso directo listo para volver cuando quieras.</p><button onClick={onNew} className="mt-5 rounded-xl bg-[#111111] px-4 py-2.5 text-[12px] font-semibold text-white">Guardar mi primer enlace</button></div> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{visible.map(item => <article key={item.id} className="group rounded-[18px] border border-[#2A2A2A] bg-[#1A1A1A] p-3 transition hover:-translate-y-0.5 hover:border-[#3A3A3A] hover:shadow-[0_12px_28px_rgba(0,0,0,.2)]"><div className="flex min-h-[86px] items-stretch gap-3"><span className="flex w-8 shrink-0 items-center justify-center rounded-[10px] bg-[#222222] text-[#E1FF00]"><Link2 size={16} /></span><div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-semibold text-[#F5F5F5]">{item.title}</h3><p className="mt-1 truncate text-[11px] text-[#FF8000]">{domain(item.url || item.body)}</p></div><button onClick={() => onFavorite(item)} aria-label={item.isFavorite ? "Quitar de favoritos" : "Añadir a favoritos"} className={`rounded-lg p-2 transition ${item.isFavorite ? "text-[#FF8000]" : "text-[#777777] hover:text-[#FF8000]"}`}><Heart size={15} fill={item.isFavorite ? "currentColor" : "none"} /></button></div><p className="mt-2 line-clamp-2 min-h-[28px] text-[11px] leading-4 text-[#8B8B8B]">{item.description || "Sin descripción. Añade contexto para encontrarlo más rápido."}</p><div className="mt-3 flex items-center justify-between gap-2 border-t border-[#2A2A2A] pt-3"><span className="truncate text-[10px] text-[#777777]">{item.category || "Sin organizar"}{item.tags ? ` · ${item.tags}` : ""}</span><div className="flex shrink-0 gap-1.5"><button onClick={() => onCopy(item)} className="rounded-lg border border-[#2A2A2A] p-2 text-[#8B8B8B] hover:bg-[#222222] hover:text-[#F5F5F5]" aria-label="Copiar enlace"><Copy size={14} /></button><button onClick={() => onOpen(item)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#FF8000] px-3 py-2 text-[10px] font-bold text-white hover:bg-[#FFA333]"><ExternalLink size={13} /> Abrir</button></div></div></article>)}</div>}
+    {visible.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#333333] bg-[#1A1A1A]/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#222222] text-[#E1FF00]"><Link2 size={20} /></span><h3 className="mt-4 font-serif text-[22px] text-[#F5F5F5]">Todavía no hay enlaces aquí</h3><p className="mx-auto mt-2 max-w-sm text-[12px] leading-5 text-[#8B8B8B]">Guarda tu primer enlace y tendrás un acceso directo listo para volver cuando quieras.</p><button onClick={onNew} className="mt-5 rounded-xl bg-[#111111] px-4 py-2.5 text-[12px] font-semibold text-white">Guardar mi primer enlace</button></div> : <div className={viewMode === "cards" ? "grid gap-3 md:grid-cols-2 xl:grid-cols-3" : "space-y-2"}>{visible.map(item => <SavedLinkCard key={item.id} item={item} viewMode={viewMode} domain={domain} onOpen={onOpen} onFavorite={onFavorite} onCopy={onCopy} />)}</div>}
   </div>;
 }
 

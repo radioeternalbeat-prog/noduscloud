@@ -26,6 +26,11 @@ describe("content procedures", () => {
     await expect(caller.content.upload({ fileName: "foto.jpg", contentType: "image/jpeg", dataBase64: "ZmFrZQ==" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
+  it("requires authentication to record a link opening", async () => {
+    const caller = appRouter.createCaller(createAnonymousContext());
+    await expect(caller.content.recordOpen({ id: 1 })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
   it("returns no data for an invalid public share token", async () => {
     const caller = appRouter.createCaller(createAnonymousContext());
     await expect(caller.share.public({ token: "token-no-existe-123" })).resolves.toBeNull();
