@@ -455,8 +455,8 @@ export default function Home() {
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-[258px] flex-col border-r border-[#e7e5dd] bg-[#fbfbf7] px-5 py-6 transition-transform duration-200 lg:translate-x-0 ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex items-center justify-between px-2">
           <button className="group flex items-center gap-3 text-left" onClick={() => selectSection("Inicio")}>
-            <span className="grid h-10 w-10 place-items-center rounded-[14px] bg-[#ef795d] text-white shadow-[0_8px_20px_rgba(239,121,93,.25)] transition-transform group-active:scale-95"><Sparkles size={19} /></span>
-            <span><span className="block font-serif text-[21px] leading-5 tracking-[-.02em] text-[#26333a]">Mi biblioteca</span><span className="mt-1 block text-[10px] font-bold uppercase tracking-[.18em] text-[#a5a9a3]">contenido personal</span></span>
+            <span className="grid h-10 w-10 place-items-center overflow-hidden rounded-[14px] bg-[#29373d] shadow-[0_8px_20px_rgba(41,55,61,.18)] transition-transform group-active:scale-95"><img src="/manus-storage/nodus-logo_489dae1f.png" alt="" className="h-full w-full object-contain" /></span>
+            <span><span className="block font-serif text-[21px] leading-5 tracking-[-.02em] text-[#26333a]">Nodus</span><span className="mt-1 block text-[10px] font-bold uppercase tracking-[.18em] text-[#a5a9a3]">todo conectado</span></span>
           </button>
           <button className="rounded-lg p-2 text-[#89918d] lg:hidden" onClick={() => setMobileMenu(false)}><X size={18} /></button>
         </div>
