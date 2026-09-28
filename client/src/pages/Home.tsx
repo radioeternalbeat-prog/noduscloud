@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
+import { normalizeLinkUrl } from "@/lib/link-utils";
 import {
   Archive,
   ArrowUpRight,
@@ -12,6 +13,7 @@ import {
   ChevronDown,
   Clipboard,
   Copy,
+  ExternalLink,
   FileText,
   Filter,
   FolderHeart,
@@ -41,7 +43,7 @@ import { toast } from "sonner";
 type ContentType = "image" | "video" | "note" | "link" | "publication";
 type Status = "idea" | "draft" | "ready" | "published";
 type VideoQuality = "original" | "1080p" | "720p" | "480p";
-type Section = "Inicio" | "Biblioteca" | "Publicaciones" | "Calendario" | "Colecciones" | "Favoritos" | "Enlaces compartidos" | "Perfiles de publicación" | "Papelera";
+type Section = "Inicio" | "Biblioteca" | "Publicaciones" | "Calendario" | "Colecciones" | "Favoritos" | "Enlaces guardados" | "Perfiles de publicación" | "Papelera";
 
 type ContentItem = {
   id: number | string;
@@ -156,7 +158,7 @@ const sections: { label: Section; icon: typeof Inbox }[] = [
   { label: "Calendario", icon: CalendarDays },
   { label: "Colecciones", icon: FolderHeart },
   { label: "Favoritos", icon: Heart },
-  { label: "Enlaces compartidos", icon: Link2 },
+  { label: "Enlaces guardados", icon: Link2 },
   { label: "Perfiles de publicación", icon: Settings2 },
 ];
 
@@ -330,6 +332,37 @@ export default function Home() {
       toast.error("Escribe un título para guardar el contenido.");
       return;
     }
+    if (composerType === "link") {
+      const normalizedUrl = normalizeLinkUrl(newBody);
+      if (!normalizedUrl) {
+        toast.error("Pega una URL válida, por ejemplo https://ejemplo.com");
+        return;
+      }
+      const linkUrl = normalizedUrl;
+      const localItem: ContentItem = {
+        id: `local-${Date.now()}`,
+        type: composerType,
+        title: newTitle.trim(),
+        body: "",
+        description: newBody.trim() || "Contenido nuevo en tu biblioteca.",
+        url: linkUrl,
+        category: newCategory,
+        tags: newPlatform ? newPlatform.toLowerCase() : "",
+        platform: newPlatform,
+        profileId: newProfileId,
+        status: newScheduledAt ? "ready" : "idea",
+        scheduledAt: newScheduledAt || null,
+        isFavorite: false,
+      };
+      if (isAuthenticated) {
+        createContent.mutate({ type: composerType, title: localItem.title, body: undefined, url: linkUrl, description: localItem.description ?? undefined, category: localItem.category ?? undefined, platform: localItem.platform ?? undefined, profileId: newProfileId, tags: localItem.tags ?? undefined, status: newScheduledAt ? "ready" : "idea", scheduledAt: newScheduledAt || undefined }, { onSuccess: created => { setItems(current => [{ ...created, tags: created.tags ?? "" }, ...current]); toast.success("Enlace guardado."); resetComposer(); }, onError: error => toast.error(error.message || "No pudimos guardar el enlace.") });
+      } else {
+        setItems(current => [localItem, ...current]);
+        toast.success("Enlace guardado en modo demo.");
+        resetComposer();
+      }
+      return;
+    }
     const localItem: ContentItem = {
       id: `local-${Date.now()}`,
       type: composerType,
@@ -350,6 +383,7 @@ export default function Home() {
         type: composerType,
         title: localItem.title,
         body: localItem.body ?? undefined,
+        url: localItem.url ?? undefined,
         description: localItem.description ?? undefined,
         category: localItem.category ?? undefined,
         platform: localItem.platform ?? undefined,
@@ -442,7 +476,7 @@ export default function Home() {
 
   const displayName = user?.name?.split(" ")[0] || "tu biblioteca";
   const title = activeSection === "Inicio" ? `Hola, ${displayName}` : activeSection;
-  const subtitle = activeSection === "Inicio" ? "Tu espacio para guardar lo que quieres volver a encontrar." : activeSection === "Favoritos" ? "Lo que marcaste para tener siempre a mano." : activeSection === "Enlaces compartidos" ? "Controla quién puede ver tus notas y colecciones." : activeSection === "Perfiles de publicación" ? "Define un estilo, plataforma y calidad para cada tipo de contenido." : "Encuentra, organiza y reutiliza tu contenido.";
+  const subtitle = activeSection === "Inicio" ? "Tu espacio para guardar lo que quieres volver a encontrar." : activeSection === "Favoritos" ? "Lo que marcaste para tener siempre a mano." : activeSection === "Enlaces guardados" ? "Tus accesos rápidos para volver a cualquier sitio en un toque." : activeSection === "Perfiles de publicación" ? "Define un estilo, plataforma y calidad para cada tipo de contenido." : "Encuentra, organiza y reutiliza tu contenido.";
 
   if (loading) {
     return <div className="min-h-screen bg-[#0A0A0A] grid place-items-center text-[#AAAAAA]"><div className="flex items-center gap-3"><span className="h-2.5 w-2.5 rounded-full bg-[#FF8000] animate-pulse" /> Preparando tu espacio...</div></div>;
@@ -504,11 +538,11 @@ export default function Home() {
           </>}
 
           {activeSection === "Calendario" && <CalendarPanel items={items} onSchedule={scheduleItem} onStatus={changeStatus} />}
-          {activeSection === "Enlaces compartidos" && <ShareAdminPanel links={shareLinksQuery.data || []} onDeactivate={id => deactivateShare.mutate({ id }, { onSuccess: () => { toast.success("Enlace desactivado."); shareLinksQuery.refetch(); } })} />}
+          {activeSection === "Enlaces guardados" && <SavedLinksPanel items={items.filter(item => item.type === "link")} query={query} onQuery={setQuery} onOpen={item => { const target = item.url || item.body; if (target) window.open(target, "_blank", "noopener,noreferrer"); else toast.info("Este enlace todavía no tiene una URL válida."); }} onFavorite={toggleFavorite} onCopy={copyItem} onNew={() => openComposer("link")} />}
           {activeSection === "Perfiles de publicación" && <ProfilePanel profiles={profilesQuery.data || []} onCreate={profile => createProfile.mutate(profile, { onSuccess: () => { toast.success("Perfil creado."); profilesQuery.refetch(); }, onError: error => toast.error(error.message || "No se pudo crear el perfil.") })} onRemove={id => removeProfile.mutate({ id }, { onSuccess: () => { toast.success("Perfil eliminado."); profilesQuery.refetch(); } })} />}
           {activeSection === "Publicaciones" && <PublishPanel items={items.filter(item => item.type === "publication" || item.status === "ready")} instagramReady={Boolean(instagramStatus.data?.configured)} onShare={shareExternally} onInstagramPublish={item => { if (typeof item.id !== "number" || (item.type !== "image" && item.type !== "video")) { toast.info("Guarda primero una foto o video real para publicarlo."); return; } publishInstagram.mutate({ contentId: item.id, mediaType: item.type === "video" ? "REELS" : "IMAGE" }, { onSuccess: () => { setItems(current => current.map(entry => entry.id === item.id ? { ...entry, status: "published", platform: "Instagram" } : entry)); toast.success("Publicado en Instagram."); }, onError: error => toast.error(error.message || "No se pudo publicar en Instagram.") }); }} />}
 
-          <section className={activeSection === "Inicio" || activeSection === "Calendario" ? "mt-8" : "mt-9"} style={{ display: activeSection === "Enlaces compartidos" || activeSection === "Perfiles de publicación" ? "none" : undefined }}>
+          <section className={activeSection === "Inicio" || activeSection === "Calendario" ? "mt-8" : "mt-9"} style={{ display: activeSection === "Enlaces guardados" || activeSection === "Perfiles de publicación" ? "none" : undefined }}>
             <div className="mb-5 flex flex-col gap-3 rounded-[18px] border border-[#2A2A2A] bg-[#1A1A1A]/60 p-2.5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-1 overflow-x-auto"><button onClick={() => setActiveFilter("all")} className={`shrink-0 rounded-xl px-3 py-2 text-[11px] font-semibold transition ${activeFilter === "all" ? "bg-[#111111] text-white" : "text-[#AAAAAA] hover:bg-[#222222]"}`}>Todo</button>{(["image", "note", "link", "publication"] as ContentType[]).map(type => <button key={type} onClick={() => setActiveFilter(type)} className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-[11px] font-semibold capitalize transition ${activeFilter === type ? "bg-[#222222] text-[#FF8000]" : "text-[#AAAAAA] hover:bg-[#222222]"}`}><TypeIcon type={type} size={13} />{type === "image" ? "Fotos" : type === "note" ? "Notas" : type === "link" ? "Enlaces" : "Publicaciones"}</button>)}</div><div className="flex items-center justify-between gap-2 px-1 sm:justify-end"><button onClick={() => setQuery("")} className="flex items-center gap-1.5 text-[11px] text-[#8B8B8B] hover:text-[#FF8000]"><Filter size={13} /> {query ? `Filtrado por “${query}”` : "Filtros"}</button><span className="h-4 w-px bg-[#e8e7df]" /><button onClick={() => setView("grid")} className={`rounded-lg p-1.5 ${view === "grid" ? "bg-[#222222] text-[#3b4a4f]" : "text-[#8B8B8B]"}`}><Grid2X2 size={15} /></button><button onClick={() => setView("list")} className={`rounded-lg p-1.5 ${view === "list" ? "bg-[#222222] text-[#3b4a4f]" : "text-[#8B8B8B]"}`}><List size={15} /></button></div></div>
 
             {visibleItems.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#333333] bg-[#1A1A1A]/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#222222] text-[#FF8000]"><Search size={20} /></span><h3 className="mt-4 font-serif text-[21px] text-[#F5F5F5]">No encontramos nada</h3><p className="mt-2 text-[12px] text-[#8B8B8B]">Prueba con otra palabra o crea un contenido nuevo.</p><button onClick={() => { setQuery(""); setActiveFilter("all"); }} className="mt-5 rounded-xl bg-[#111111] px-4 py-2.5 text-[12px] font-semibold text-white">Limpiar filtros</button></div> : <div className={view === "grid" ? "grid gap-4 sm:grid-cols-2 xl:grid-cols-3" : "space-y-3"}>{visibleItems.map((item, index) => <ContentCard key={item.id} item={item} index={index} view={view} onFavorite={() => toggleFavorite(item)} onCopy={() => copyItem(item)} onShare={() => openShare(item)} />)}</div>}
@@ -583,6 +617,31 @@ function ShareDialog({ target, shareUrl, shareId, onClose, onCreate, onDeactivat
   return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#26343a]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div role="dialog" aria-modal="true" className="w-full max-w-[500px] rounded-t-[26px] border border-white/80 bg-[#161616] p-5 shadow-[0_24px_70px_rgba(31,44,49,.22)] sm:rounded-[26px] sm:p-7"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#FF8000]">Compartir de forma privada</p><h2 className="mt-2 font-serif text-[28px] tracking-[-.04em] text-[#F5F5F5]">{target.title}</h2></div><button onClick={onClose} className="rounded-xl p-2 text-[#9da5a2] hover:bg-[#222222]"><X size={18} /></button></div><p className="mt-4 text-[12px] leading-5 text-[#7e8987]">Crea un enlace secreto de solo lectura para enviarlo a tus contactos. Puedes dejar de compartirlo cuando quieras.</p>{shareUrl ? <div className="mt-5 rounded-2xl bg-[#1A1A1A] p-4"><p className="text-[11px] font-semibold text-[#377557]">Enlace activo y copiado</p><div className="mt-2 flex items-center gap-2"><input readOnly value={shareUrl} className="min-w-0 flex-1 rounded-lg border border-[#cbe4d5] bg-[#1A1A1A] px-3 py-2 text-[11px] text-[#4a6e5b] outline-none" /><button onClick={() => { navigator.clipboard?.writeText(shareUrl); toast.success("Enlace copiado."); }} className="rounded-lg bg-[#4d9975] px-3 py-2 text-[11px] font-semibold text-white">Copiar</button></div></div> : <div className="mt-5 rounded-2xl border border-[#2A2A2A] bg-[#1A1A1A] p-4"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#222222] text-[#FF8000]"><Link2 size={18} /></span><div><p className="text-[12px] font-semibold text-[#E5E5E5]">Enlace privado</p><p className="mt-1 text-[11px] text-[#8B8B8B]">Solo quien tenga este enlace podrá verlo.</p></div></div></div>}{cannotCreate && <p className="mt-3 text-[11px] text-[#b26a58]">Este contenido de demostración debe guardarse primero como contenido real para poder compartirlo.</p>}<div className="mt-6 flex justify-end gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5 text-[12px] font-semibold text-[#AAAAAA] hover:bg-[#222222]">Cerrar</button>{shareUrl && shareId && <button onClick={onDeactivate} className="rounded-xl border border-[#333333] px-4 py-2.5 text-[12px] font-semibold text-[#FF8000] hover:bg-[#222222]">Desactivar enlace</button>}{!shareUrl && <button disabled={creating || cannotCreate} onClick={onCreate} className="rounded-xl bg-[#111111] px-5 py-2.5 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{creating ? "Creando..." : "Crear enlace privado"}</button>}</div></div></div>;
 }
 
+
+function SavedLinksPanel({ items, query, onQuery, onOpen, onFavorite, onCopy, onNew }: { items: ContentItem[]; query: string; onQuery: (value: string) => void; onOpen: (item: ContentItem) => void; onFavorite: (item: ContentItem) => void; onCopy: (item: ContentItem) => void; onNew: () => void }) {
+  const [category, setCategory] = useState("Todos");
+  const categories = ["Todos", ...Array.from(new Set(items.map(item => item.category || "Sin organizar"))).sort()];
+  const normalized = query.trim().toLowerCase();
+  const visible = items.filter(item => {
+    const matchesCategory = category === "Todos" || (item.category || "Sin organizar") === category;
+    const searchable = [item.title, item.url, item.description, item.tags, item.category].filter(Boolean).join(" ").toLowerCase();
+    return matchesCategory && (!normalized || searchable.includes(normalized));
+  });
+  const domain = (url?: string | null) => {
+    try { return url ? new URL(url).hostname.replace(/^www\./, "") : "Sin URL"; } catch { return "Enlace"; }
+  };
+
+  return <div className="space-y-5">
+    <div className="rounded-[22px] border border-[#2A2A2A] bg-[#1A1A1A] p-5 sm:p-7">
+      <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
+        <div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#FF8000]">Acceso rápido</p><h2 className="mt-2 font-serif text-[29px] tracking-[-.04em]">Tus enlaces, a un toque</h2><p className="mt-2 max-w-xl text-[12px] leading-5 text-[#8B8B8B]">Guarda referencias, herramientas y páginas importantes. Búscalas, ábrelas o compártelas sin volver a revisar conversaciones.</p></div>
+        <button onClick={onNew} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#FF8000] px-4 text-[12px] font-semibold text-white shadow-[0_8px_18px_rgba(255,128,0,.18)] transition hover:-translate-y-0.5 active:scale-[.98]"><Plus size={16} /> Guardar enlace</button>
+      </div>
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777777]" size={15} /><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Buscar por nombre, sitio o etiqueta..." aria-label="Buscar enlaces guardados" className="h-11 w-full rounded-xl border border-[#2A2A2A] bg-[#111111] pl-10 pr-3 text-[12px] text-[#E5E5E5] outline-none placeholder:text-[#6B6B6B] focus:border-[#FF8000]" /></label><div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-[#2A2A2A] bg-[#111111] p-1">{categories.map(option => <button key={option} onClick={() => setCategory(option)} className={`shrink-0 rounded-lg px-3 py-2 text-[10px] font-semibold transition ${category === option ? "bg-[#222222] text-[#FF8000]" : "text-[#8B8B8B] hover:text-[#F5F5F5]"}`}>{option}</button>)}</div></div>
+    </div>
+    {visible.length === 0 ? <div className="rounded-[22px] border border-dashed border-[#333333] bg-[#1A1A1A]/50 px-6 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#222222] text-[#E1FF00]"><Link2 size={20} /></span><h3 className="mt-4 font-serif text-[22px] text-[#F5F5F5]">Todavía no hay enlaces aquí</h3><p className="mx-auto mt-2 max-w-sm text-[12px] leading-5 text-[#8B8B8B]">Guarda tu primer enlace y tendrás un acceso directo listo para volver cuando quieras.</p><button onClick={onNew} className="mt-5 rounded-xl bg-[#111111] px-4 py-2.5 text-[12px] font-semibold text-white">Guardar mi primer enlace</button></div> : <div className="grid gap-3 md:grid-cols-2">{visible.map(item => <article key={item.id} className="group rounded-[18px] border border-[#2A2A2A] bg-[#1A1A1A] p-4 transition hover:-translate-y-0.5 hover:border-[#3A3A3A] hover:shadow-[0_12px_28px_rgba(0,0,0,.2)]"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#222222] text-[#E1FF00]"><Link2 size={17} /></span><div className="min-w-0 flex-1"><h3 className="truncate text-[13px] font-semibold text-[#F5F5F5]">{item.title}</h3><p className="mt-1 truncate text-[11px] text-[#FF8000]">{domain(item.url || item.body)}</p></div><button onClick={() => onFavorite(item)} aria-label={item.isFavorite ? "Quitar de favoritos" : "Añadir a favoritos"} className={`rounded-lg p-2 transition ${item.isFavorite ? "text-[#FF8000]" : "text-[#777777] hover:text-[#FF8000]"}`}><Heart size={15} fill={item.isFavorite ? "currentColor" : "none"} /></button></div><p className="mt-4 line-clamp-2 min-h-[32px] text-[11px] leading-4 text-[#8B8B8B]">{item.description || "Sin descripción. Añade contexto para encontrarlo más rápido."}</p><div className="mt-4 flex items-center justify-between gap-2 border-t border-[#2A2A2A] pt-3"><span className="truncate text-[10px] text-[#777777]">{item.category || "Sin organizar"}{item.tags ? ` · ${item.tags}` : ""}</span><div className="flex shrink-0 gap-1.5"><button onClick={() => onCopy(item)} className="rounded-lg border border-[#2A2A2A] p-2 text-[#8B8B8B] hover:bg-[#222222] hover:text-[#F5F5F5]" aria-label="Copiar enlace"><Copy size={14} /></button><button onClick={() => onOpen(item)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#FF8000] px-3 py-2 text-[10px] font-bold text-white hover:bg-[#FFA333]"><ExternalLink size={13} /> Abrir</button></div></div></article>)}</div>}
+  </div>;
+}
 
 function ShareAdminPanel({ links, onDeactivate }: { links: Array<{ id: number; token: string; kind: "content" | "collection"; title: string; isActive: boolean; createdAt: Date | string; expiresAt?: Date | string | null }>; onDeactivate: (id: number) => void }) {
   return <div className="rounded-[22px] border border-[#2A2A2A] bg-[#1A1A1A] p-5 sm:p-7"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#FF8000]">Privacidad</p><h2 className="mt-2 font-serif text-[27px] tracking-[-.03em]">Enlaces compartidos</h2><p className="mt-2 text-[12px] text-[#8B8B8B]">Revoca el acceso cuando quieras. Los enlaces inactivos dejan de mostrar contenido.</p></div><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#1A1A1A] text-[#E1FF00]"><Link2 size={18} /></span></div>{links.length === 0 ? <div className="mt-8 rounded-2xl border border-dashed border-[#333333] px-5 py-10 text-center"><p className="text-sm font-semibold text-[#AAAAAA]">Aún no tienes enlaces compartidos</p><p className="mt-2 text-xs text-[#8B8B8B]">Usa el icono de compartir en una tarjeta o crea un enlace de colección.</p></div> : <div className="mt-7 space-y-3">{links.map(link => { const url = `${window.location.origin}/share/${link.token}`; return <div key={link.id} className="flex flex-col gap-3 rounded-2xl border border-[#2A2A2A] bg-[#1A1A1A] p-4 sm:flex-row sm:items-center"><span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${link.kind === "collection" ? "bg-[#222222] text-[#E1FF00]" : "bg-[#222222] text-[#FF8000]"}`}><Link2 size={17} /></span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[13px] font-semibold text-[#E5E5E5]">{link.title}</h3><span className={`rounded-full px-2 py-1 text-[9px] font-bold ${link.isActive ? "bg-[#1A1A1A] text-[#E1FF00]" : "bg-[#222222] text-[#8B8B8B]"}`}>{link.isActive ? "Activo" : "Revocado"}</span></div><p className="mt-1 truncate text-[11px] text-[#99a29f]">Creado el {new Date(link.createdAt).toLocaleDateString("es-ES")} · {link.kind === "collection" ? "Colección" : "Contenido individual"}</p></div><div className="flex gap-2"><button disabled={!link.isActive} onClick={() => { navigator.clipboard?.writeText(url); toast.success("Enlace copiado."); }} className="rounded-lg border border-[#2A2A2A] px-3 py-2 text-[11px] font-semibold text-[#69767a] disabled:opacity-40">Copiar</button><a href={`/share/${link.token}`} target="_blank" rel="noreferrer" className={`rounded-lg border border-[#2A2A2A] px-3 py-2 text-[11px] font-semibold text-[#69767a] ${!link.isActive ? "pointer-events-none opacity-40" : ""}`}>Abrir</a>{link.isActive && <button onClick={() => onDeactivate(link.id)} className="rounded-lg border border-[#333333] px-3 py-2 text-[11px] font-semibold text-[#FF8000]">Revocar</button>}</div></div>; })}</div>}</div>;
